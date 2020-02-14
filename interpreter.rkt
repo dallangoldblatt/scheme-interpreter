@@ -1,9 +1,10 @@
 #lang racket
 (require "simpleParser.rkt")
 
+; Entrypoint into the interpreter
 (define interpret
   (lambda (file)
-    (M-value-statement-list (parser file) (new-state))))
+    (M-value-statement-list (parser file) (S-new))))
 
 ;;;; STATEMENT FORMATS
 ;; Atoms in UPPERCASE implement M-state and M-value
@@ -27,7 +28,8 @@
 ; (while CONDITIONAL STATEMENT)
 
 
-;; STATEMENT LIST
+;;;; STATEMENT LIST
+;; -----------------------------------------------------------------------
 
 ; Calculate the value of a statement list
 (define M-value-statement-list
@@ -47,7 +49,8 @@
 (define remaining-statements cdr)
 
 
-;; STATEMENT
+;;;; STATEMENT
+;; -----------------------------------------------------------------------
     
 ; Calculate the value of a statement
 (define M-value-statement
@@ -64,17 +67,19 @@
 (define return-expression cadr)
 
 
-;; CONDITIONAL
+;;;; CONDITIONAL
+;; -----------------------------------------------------------------------
+
 ; test with: (M-value-conditional '(&& (!= 3 5) (< 3 4)) '())
 (define M-value-conditional
   (lambda (conditional state)
     (cond
       ((null? conditional) (error "Null parameter passed to M-value-conditional"))
-      ((eq? '&& (connective conditional)) (c-and (M-value-conditional (leftoperand conditional) state)
-                                                           (M-value-conditional (rightoperand conditional) state)))
-      ((eq? '|| (connective conditional)) (c-or (M-value-conditional (leftoperand conditional) state)
-                                                          (M-value-conditional (rightoperand conditional) state)))
-      ((eq? '! (connective conditional)) (c-not (M-value-conditional (leftoperand conditional) state)))
+      ((eq? '&& (connective conditional)) (C-and (M-value-conditional (leftoperand conditional) state)
+                                                 (M-value-conditional (rightoperand conditional) state)))
+      ((eq? '|| (connective conditional)) (C-or (M-value-conditional (leftoperand conditional) state)
+                                                (M-value-conditional (rightoperand conditional) state)))
+      ((eq? '! (connective conditional)) (C-not (M-value-conditional (leftoperand conditional) state)))
       (else (M-value-comparison conditional state)))))
 
 ; A comparison will not change the state (for now)
@@ -82,7 +87,8 @@
   (lambda (expression state) state))
 
 
-;; COMPARISON
+;;;; COMPARISON
+;; -----------------------------------------------------------------------
 
 (define M-value-comparison
   (lambda (comparison state)
@@ -90,25 +96,26 @@
       ((null? comparison) (error "Null parameter passed to M-value-comparison"))
       ((eq? 'true comparison) 'true)
       ((eq? 'false comparison) 'false)
-      ((eq? '< (comparator comparison)) (c-< (M-value-expression (leftoperand comparison) state)
-                                           (M-value-expression (rightoperand comparison) state)))
-      ((eq? '> (comparator comparison)) (c-> (M-value-expression (leftoperand comparison) state)
-                                           (M-value-expression (rightoperand comparison) state)))
-      ((eq? '== (comparator comparison)) (c-== (M-value-expression (leftoperand comparison) state)
+      ((eq? '< (comparator comparison)) (C-< (M-value-expression (leftoperand comparison) state)
                                              (M-value-expression (rightoperand comparison) state)))
-      ((eq? '<= (comparator comparison)) (c-<= (M-value-expression (leftoperand comparison) state)
+      ((eq? '> (comparator comparison)) (C-> (M-value-expression (leftoperand comparison) state)
                                              (M-value-expression (rightoperand comparison) state)))
-      ((eq? '>= (comparator comparison)) (c->= (M-value-expression (leftoperand comparison) state)
-                                             (M-value-expression (rightoperand comparison) state)))
-      ((eq? '!= (comparator comparison)) (c-!= (M-value-expression (leftoperand comparison) state)
-                                             (M-value-expression (rightoperand comparison) state)))
+      ((eq? '== (comparator comparison)) (C-== (M-value-expression (leftoperand comparison) state)
+                                               (M-value-expression (rightoperand comparison) state)))
+      ((eq? '<= (comparator comparison)) (C-<= (M-value-expression (leftoperand comparison) state)
+                                               (M-value-expression (rightoperand comparison) state)))
+      ((eq? '>= (comparator comparison)) (C->= (M-value-expression (leftoperand comparison) state)
+                                               (M-value-expression (rightoperand comparison) state)))
+      ((eq? '!= (comparator comparison)) (C-!= (M-value-expression (leftoperand comparison) state)
+                                               (M-value-expression (rightoperand comparison) state)))
       (else (error 'badop "The comparator is unknown")))))
 
 ; A comparison will not change the state (for now)
 (define M-state-comparison
   (lambda (comparison state) state))
 
-;; EXPRESSION
+;;;; EXPRESSION
+;; -----------------------------------------------------------------------
     
 ; Calculate the value of a mathematical expression
 (define M-value-expression
@@ -116,7 +123,7 @@
     (cond
       ((null? expression) (error "Null parameter passed to M-value-expression"))
       ((number? expression) expression)
-      ((atom? expression) (lookup expression state))
+      ((atom? expression) (S-lookup expression state))
       ((eq? '+ (operator expression)) (+ (M-value-expression (leftoperand expression) state)
                                          (M-value-expression (rightoperand expression) state)))
       ((eq? '- (operator expression)) (- (M-value-expression (leftoperand expression) state)
@@ -140,73 +147,90 @@
 (define leftoperand cadr)
 (define rightoperand caddr)
 
-; TODO make this call a utility function
-(define c-and
+(define C-and
   (lambda (loperand roperand)
-    (if (and (eq? loperand 'true) (eq? roperand 'true))
-        'true
-        'false)))
-(define c-or
+    (true? (and (eq? loperand 'true) (eq? roperand 'true)))))
+(define C-or
   (lambda (loperand roperand)
-    (if (or (eq? loperand 'true) (eq? roperand 'true))
-        'true
-        'false)))
-(define c-not
+    (true? (or (eq? loperand 'true) (eq? roperand 'true)))))
+(define C-not
   (lambda (operand)
-    (if (eq? operand 'false)
-        'true
-        'false)))
-(define c-<
+    (true? (eq? operand 'false))))
+(define C-<
   (lambda (loperand roperand)
-    (if (< loperand roperand)
-        'true
-        'false)))
-(define c->
+    (true? (< loperand roperand))))
+(define C->
   (lambda (loperand roperand)
-    (if (> loperand roperand)
-        'true
-        'false)))
-(define c-==
+    (true? (> loperand roperand))))
+(define C-==
   (lambda (loperand roperand)
-    (if (= loperand roperand)
-        'true
-        'false)))
-(define c-<=
+    (true? (= loperand roperand))))
+(define C-<=
   (lambda (loperand roperand)
-    (if (<= loperand roperand)
-        'true
-        'false)))
-(define c->=
+    (true? (<= loperand roperand))))
+(define C->=
   (lambda (loperand roperand)
-    (if (>= loperand roperand)
-        'true
-        'false)))
-(define c-!=
+    (true? (>= loperand roperand))))
+(define C-!=
   (lambda (loperand roperand)
-    (if (not (= loperand roperand))
-        'true
-        'false)))
+    (true? (not (= loperand roperand)))))
 
-     
-;; STATE
-    
-; State functions
-(define new-state
-  (lambda () '())) ; TODO is this hard-coded?
 
-(define lookup
+;;;; State functions
+;; -----------------------------------------------------------------------
+
+; Return a new state with an empty return variable
+(define S-new
+  (lambda () '((return) '()))) ; TODO is this hard-coded?
+
+; Search for a variable by name in the state and returns its value
+; Creates an error if the state does not contain the variable
+(define S-lookup
   (lambda (variable state)
-    (car (car state))))  ; TODO
-
-(define add
+    (cond 
+      ((null? state) (error "Variable not found in state"))
+      ((eq? variable (first-var state)) (first-val state))
+      (else (S-lookup variable (cdr state))))))
+  
+; Update the value of a variable in the state
+; If it does not exist, add it to the state
+(define S-assign
   (lambda (variable value state)
-    (cons '(variable value) state))) ; TODO
+    (cond 
+      ((null? state) (list variable value))
+      ((eq? variable (first-var state)) (S-add variable value (S-remove variable state)))
+      (else (cons (first-binding state) (S-assign variable value (cdr state)))))))
 
-(define remove
+; Add a new variable and value to the state
+(define S-add
+  (lambda (variable value state)
+    (cons (list variable value) state)))
+
+; Remove a variable from the state
+; If the variable is already not present, no error is created
+(define S-remove
   (lambda (variable state)
-    (cons '(variable value) state)))  ; TODO
+    (cond 
+      ((null? state) '())
+      ((eq? variable (first-var state)) (cdr state))
+      (else (cons (first-binding state) (S-remove variable (cdr state)))))))
 
-; Utility functions
+(define first-var caar)
+(define first-val cadar)
+(define first-binding car)
+
+  
+;; Utility functions
+;; -----------------------------------------------------------------------
+
+; Determine if x is an atom
 (define atom?
   (lambda (x)
     (not (or (pair? x) (null? x)))))
+
+; Convert a #t and #f to 'true and 'false
+(define true?
+  (lambda (condition)
+    (if condition
+        'true
+        'false)))
