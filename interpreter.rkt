@@ -4,9 +4,11 @@
 ; Entrypoint into the interpreter
 (define interpret
   (lambda (file)
-    (M-value-statement-list (parser file) (S-new))))
+    (S-lookup 'return (M-state-statement-list (parser file) (S-new)))))
+
 
 ;;;; STATEMENT FORMATS
+;; -----------------------------------------------------------------------
 ;; Atoms in UPPERCASE implement M-state and M-value
 ;; Symbols and atoms in lowercase are part of the language
 
@@ -28,20 +30,27 @@
 ; (while CONDITIONAL STATEMENT)
 
 
+;; -----------------------------------------------------------------------
+;;;; The following prefixes have been used to distinguish abstaction functions
+;; Condtional: C-
+;; State:      S-
+
+
 ;;;; STATEMENT LIST
 ;; -----------------------------------------------------------------------
 
 ; Calculate the value of a statement list
-(define M-value-statement-list
+; TODO A statement list has no value?
+(define M-value-statement-list '
   (lambda (statement-list state)
-    (cond
-      ((null? statement-list) '())
-      ((eq? 'return (first-statement-type statement-list)) (M-value-statement (first-statement statement-list) state))
-      (else (M-value-statement-list (remaining-statements statement-list) (M-state-statement (first-statement statement-list) state))))))
+    '()))
     
 ; Calculate the state resulting from a statement list
 (define M-state-statement-list
-  (lambda (statement-list state) state)) ; TODO
+  (lambda (statement-list state) state
+    (cond
+      ((null? statement-list) state)
+      (else (M-state-statement-list (remaining-statements statement-list) (M-state-statement (first-statement statement-list) state))))))
 
 ; Statement abstractions
 (define first-statement-type caar)
@@ -51,24 +60,53 @@
 
 ;;;; STATEMENT
 ;; -----------------------------------------------------------------------
-    
-; Calculate the value of a statement
-(define M-value-statement
+; Calculate the value or resulting state of a particular statement
+
+; The following statement types should have a return value:
+;   declaration, assignment, return
+
+; Calcualte the state resulting from a genereric statement
+(define M-state-statement
   (lambda (statement state)
     (cond
-      ((eq? 'return (statement-type statement)) (M-value-expression (return-expression statement) state)))))
+      ((eq? 'return (statement-type statement)) (M-state-return statement state))
+      ((eq? 'var (statement-type statement)) (M-state-declare statement state))
+      ((eq? '= (statement-type statement)) (M-state-assign statement state))
+      (else state))))
 
-; Calculate the state resulting from a statement
-(define M-state-statement
-  (lambda (statement state) state)) ; TODO
+; Calculate the state resulting from a return statement
+(define M-state-return
+  (lambda (statement state)
+    (S-assign 'return (M-value-expression (return-expression statement) state) state)))
+
+; Calculate the state resulting from a declare statement
+(define M-state-declare
+  (lambda (statement state)
+    (if (declare-has-assignment statement)
+        (S-assign (declare-name statement) (M-value-expression (declare-expression statement) state) state)
+        (S-assign (declare-name statement) 0 state)))) ; TODO initialize vars to 0?
+
+; Calculate the state resulting from an assign statement
+(define M-state-assign
+  (lambda (statement state)
+    (S-assign (assign-name statement) (M-value-expression (assign-expression statement) state) state)))
 
 ; Statement abstractions
 (define statement-type car)
 (define return-expression cadr)
+(define declare-name cadr)
+(define declare-expression caddr)
+(define assign-name cadr)
+(define assign-expression caddr)
+
+(define declare-has-assignment
+  (lambda (statement)
+    (not (null? (cddr statement)))))
 
 
 ;;;; CONDITIONAL
 ;; -----------------------------------------------------------------------
+;; Conditionals return 'true or 'false and connect one or more comparisons
 
 ; test with: (M-value-conditional '(&& (!= 3 5) (< 3 4)) '())
 (define M-value-conditional
@@ -89,6 +127,7 @@
 
 ;;;; COMPARISON
 ;; -----------------------------------------------------------------------
+;; Comparisons return 'true or 'false and compare expressions
 
 (define M-value-comparison
   (lambda (comparison state)
@@ -114,8 +153,10 @@
 (define M-state-comparison
   (lambda (comparison state) state))
 
+
 ;;;; EXPRESSION
 ;; -----------------------------------------------------------------------
+;; Expressions are numerical calulations and boolean values
     
 ; Calculate the value of a mathematical expression
 (define M-value-expression
@@ -123,6 +164,7 @@
     (cond
       ((null? expression) (error "Null parameter passed to M-value-expression"))
       ((number? expression) expression)
+      ((true-or-false? expression) expression)
       ((atom? expression) (S-lookup expression state))
       ((eq? '+ (operator expression)) (+ (M-value-expression (leftoperand expression) state)
                                          (M-value-expression (rightoperand expression) state)))
@@ -140,7 +182,7 @@
 (define M-state-expression
   (lambda (expression state) state))
 
-; Expression and Conditional abstractions
+; Conditional, comparison, and expression abstractions
 (define comparator car)
 (define connective car)
 (define operator car)
@@ -181,7 +223,7 @@
 
 ; Return a new state with an empty return variable
 (define S-new
-  (lambda () '((return) '()))) ; TODO is this hard-coded?
+  (lambda () '((return 0)))) ; TODO is this hard-coded?
 
 ; Search for a variable by name in the state and returns its value
 ; Creates an error if the state does not contain the variable
@@ -197,7 +239,7 @@
 (define S-assign
   (lambda (variable value state)
     (cond 
-      ((null? state) (list variable value))
+      ((null? state) (S-add variable value '()))
       ((eq? variable (first-var state)) (S-add variable value (S-remove variable state)))
       (else (cons (first-binding state) (S-assign variable value (cdr state)))))))
 
@@ -227,6 +269,11 @@
 (define atom?
   (lambda (x)
     (not (or (pair? x) (null? x)))))
+
+; Determine if x is 'true or 'false
+(define true-or-false?
+  (lambda (x)
+    (or (eq? x 'true) (eq? x 'false))))
 
 ; Convert a #t and #f to 'true and 'false
 (define true?
