@@ -6,6 +6,8 @@
   (lambda (file)
     (S-lookup 'return (M-state-statement-list (parser file) (S-new)))))
 
+; TODO add side effects
+
 
 ;;;; STATEMENT FORMATS
 ;; -----------------------------------------------------------------------
@@ -15,12 +17,15 @@
 ;; Variable declaration
 ; (var VARIABLE)
 ; (var VARIABLE EXPRESSION)
+; (var VARIABLE CONDITIONAL) # TODO
 
 ;; Assignment
 ; (= VARIABLE EXPRESSION)
+; (= VARIABLE CONDTIONAL) # TODO
 
 ;; Return
 ; (return EXPRESSION)
+; (return CONDITIONAL) # TODO
 
 ;; If statement
 ; (if CONDITIONAL then STATEMENT)
@@ -72,6 +77,8 @@
       ((eq? 'return (statement-type statement)) (M-state-return statement state))
       ((eq? 'var (statement-type statement)) (M-state-declare statement state))
       ((eq? '= (statement-type statement)) (M-state-assign statement state))
+      ((eq? 'if (statement-type statement)) (M-state-if statement state))
+      ((eq? 'while (statement-type statement)) (M-state-while statement state))
       (else state))))
 
 ; Calculate the state resulting from a return statement
@@ -82,14 +89,32 @@
 ; Calculate the state resulting from a declare statement
 (define M-state-declare
   (lambda (statement state)
-    (if (declare-has-assignment statement)
+    (if (declare-has-assignment? statement)
         (S-assign (declare-name statement) (M-value-expression (declare-expression statement) state) state)
-        (S-assign (declare-name statement) 0 state)))) ; TODO initialize vars to 0?
+        (S-assign (declare-name statement) #f state)))) ; TODO initialize vars to #f?
 
 ; Calculate the state resulting from an assign statement
 (define M-state-assign
   (lambda (statement state)
     (S-assign (assign-name statement) (M-value-expression (assign-expression statement) state) state)))
+
+; Calculate the state resulting from an if statement
+; TODO handle return statements within an if (done by checking if return no longer is #f?
+(define M-state-if
+  (lambda (statement state)
+    (cond
+      ((C-true? (M-value-conditional (if-condtion statement) state)) (M-state-statement (if-statement statement) state))
+      ((if-has-else? (statement)) (M-state-statement (else-statement statement) state))
+      (else state))))
+
+; Calculate the state resulting from a while statement
+; TODO handle return statements within a while (done by checking if return no longer is #f?
+(define M-state-while
+  (lambda (statement state)
+    (cond
+      ((C-true? (M-value-conditional (while-condtion statement) state))
+       (M-state-while statement (M-state-statement (while-statement statement) state)))
+      (else state))))
 
 ; Statement abstractions
 (define statement-type car)
@@ -98,8 +123,17 @@
 (define declare-expression caddr)
 (define assign-name cadr)
 (define assign-expression caddr)
+(define if-condtion cadr)
+(define if-statement caddr)
+(define else-statement cadddr)
+(define while-condtion cadr)
+(define while-statement caddr)
 
-(define declare-has-assignment
+(define if-has-else?
+  (lambda (statement)
+    (not (null? (cdddr statement)))))
+
+(define declare-has-assignment?
   (lambda (statement)
     (not (null? (cddr statement)))))
 
@@ -109,7 +143,7 @@
 ;; Conditionals return 'true or 'false and connect one or more comparisons
 
 ; test with: (M-value-conditional '(&& (!= 3 5) (< 3 4)) '())
-(define M-value-conditional
+(define M-value-conditional ; TODO should this be M-boolean?
   (lambda (conditional state)
     (cond
       ((null? conditional) (error "Null parameter passed to M-value-conditional"))
@@ -147,7 +181,7 @@
                                                (M-value-expression (rightoperand comparison) state)))
       ((eq? '!= (comparator comparison)) (C-!= (M-value-expression (leftoperand comparison) state)
                                                (M-value-expression (rightoperand comparison) state)))
-      (else (error 'badop "The comparator is unknown")))))
+      (else (M-value-expression comparison state)))))
 
 ; A comparison will not change the state (for now)
 (define M-state-comparison
@@ -176,7 +210,7 @@
                                                 (M-value-expression (rightoperand expression) state)))
       ((eq? '% (operator expression)) (modulo (M-value-expression (leftoperand expression) state)
                                               (M-value-expression (rightoperand expression) state)))
-      (else (error 'badop "The operator is unknown")))))
+      (else (print expression) (error 'badop "The operator is unknown")))))
 
 ; A mathematical expression will not change the state (for now)
 (define M-state-expression
@@ -223,7 +257,7 @@
 
 ; Return a new state with an empty return variable
 (define S-new
-  (lambda () '((return 0)))) ; TODO is this hard-coded?
+  (lambda () (S-add' return #f '()))) ; TODO is this hard-coded?
 
 ; Search for a variable by name in the state and returns its value
 ; Creates an error if the state does not contain the variable
@@ -281,3 +315,8 @@
     (if condition
         'true
         'false)))
+
+; Convert a 'true or 'false to #t or #f
+(define C-true?
+  (lambda (value)
+    (eq? value 'true)))
