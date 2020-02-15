@@ -208,6 +208,7 @@
       ((number? expression) expression)
       ((true-or-false? expression) expression)
       ((atom? expression) (S-lookup expression state))
+      ((eq? '= (operator expression)) (M-state-assign expression state))
       ((eq? '+ (operator expression)) (+ (M-value-expression (leftoperand expression) state)
                                          (M-value-expression (rightoperand expression) state)))
       ((eq? '- (operator expression)) (- (M-value-expression (leftoperand expression) state)
