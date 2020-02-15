@@ -17,15 +17,15 @@
 ;; Variable declaration
 ; (var VARIABLE)
 ; (var VARIABLE EXPRESSION)
-; (var VARIABLE CONDITIONAL) # TODO
+; (var VARIABLE CONDITIONAL)
 
 ;; Assignment
 ; (= VARIABLE EXPRESSION)
-; (= VARIABLE CONDTIONAL) # TODO
+; (= VARIABLE CONDTIONAL)
 
 ;; Return
 ; (return EXPRESSION)
-; (return CONDITIONAL) # TODO
+; (return CONDITIONAL)
 
 ;; If statement
 ; (if CONDITIONAL then STATEMENT)
