@@ -49,7 +49,6 @@
 ;; -----------------------------------------------------------------------
 
 ; Calculate the value of a statement list
-; TODO A statement list has no value?
 (define M-value-statement-list '
   (lambda (statement-list state)
     '()))
@@ -95,7 +94,7 @@
   (lambda (statement state)
     (if (declare-has-assignment? statement)
         (S-assign (declare-name statement) (M-value-expression (declare-expression statement) state) state)
-        (S-assign (declare-name statement) #f state)))) ; TODO initialize vars to #f? Maybe initialize them to 'null
+        (S-assign (declare-name statement) 'null state))))
 
 ; Calculate the state resulting from an assign statement
 (define M-state-assign
@@ -261,7 +260,7 @@
 
 ; Return a new state with an empty return variable
 (define S-new
-  (lambda () (S-add' return #f '()))) ; TODO is this hard-coded?
+  (lambda () (S-add' return 'null '())))
 
 ; Search for a variable by name in the state and returns its value
 ; Creates an error if the state does not contain the variable
