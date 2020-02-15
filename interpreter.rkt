@@ -87,7 +87,7 @@
 ; Calculate the state resulting from a return statement and assign it to 'return
 (define M-state-return
   (lambda (statement state)
-    (S-assign 'return (M-value-expression (return-expression statement) state) state)))
+    (S-assign 'return (M-value-conditional (return-expression statement) state) state)))
 
 ; Calculate the state resulting from a declare statement
 (define M-state-declare
@@ -107,7 +107,7 @@
   (lambda (statement state)
     (cond
       ((C-true? (M-value-conditional (if-condtion statement) state)) (M-state-statement (if-statement statement) state))
-      ((if-has-else? (statement)) (M-state-statement (else-statement statement) state))
+      ((if-has-else? statement) (M-state-statement (else-statement statement) state))
       (else state))))
 
 ; Calculate the state resulting from a while statement
@@ -150,11 +150,13 @@
   (lambda (conditional state)
     (cond
       ((null? conditional) (error "Null parameter passed to M-value-conditional"))
-      ((eq? '&& (connective conditional)) (C-and (M-value-conditional (leftoperand conditional) state)
-                                                 (M-value-conditional (rightoperand conditional) state)))
-      ((eq? '|| (connective conditional)) (C-or (M-value-conditional (leftoperand conditional) state)
-                                                (M-value-conditional (rightoperand conditional) state)))
-      ((eq? '! (connective conditional)) (C-not (M-value-conditional (leftoperand conditional) state)))
+      ((pair? conditional) (cond
+                             ((eq? '&& (connective conditional)) (C-and (M-value-conditional (leftoperand conditional) state)
+                                                                        (M-value-conditional (rightoperand conditional) state)))
+                             ((eq? '|| (connective conditional)) (C-or (M-value-conditional (leftoperand conditional) state)
+                                                                       (M-value-conditional (rightoperand conditional) state)))
+                             ((eq? '! (connective conditional)) (C-not (M-value-conditional (leftoperand conditional) state)))
+                             (else (M-value-comparison conditional state))))
       (else (M-value-comparison conditional state)))))
 
 ; A comparison will not change the state (for now)
@@ -172,24 +174,27 @@
       ((null? comparison) (error "Null parameter passed to M-value-comparison"))
       ((eq? 'true comparison) 'true)
       ((eq? 'false comparison) 'false)
-      ((eq? '< (comparator comparison)) (C-< (M-value-expression (leftoperand comparison) state)
-                                             (M-value-expression (rightoperand comparison) state)))
-      ((eq? '> (comparator comparison)) (C-> (M-value-expression (leftoperand comparison) state)
-                                             (M-value-expression (rightoperand comparison) state)))
-      ((eq? '== (comparator comparison)) (C-== (M-value-expression (leftoperand comparison) state)
-                                               (M-value-expression (rightoperand comparison) state)))
-      ((eq? '<= (comparator comparison)) (C-<= (M-value-expression (leftoperand comparison) state)
-                                               (M-value-expression (rightoperand comparison) state)))
-      ((eq? '>= (comparator comparison)) (C->= (M-value-expression (leftoperand comparison) state)
-                                               (M-value-expression (rightoperand comparison) state)))
-      ((eq? '!= (comparator comparison)) (C-!= (M-value-expression (leftoperand comparison) state)
-                                               (M-value-expression (rightoperand comparison) state)))
+      ((pair? comparison) (cond
+                            ((eq? '< (comparator comparison)) (C-< (M-value-expression (leftoperand comparison) state)
+                                                                   (M-value-expression (rightoperand comparison) state)))
+                            ((eq? '> (comparator comparison)) (C-> (M-value-expression (leftoperand comparison) state)
+                                                                   (M-value-expression (rightoperand comparison) state)))
+                            ((eq? '== (comparator comparison)) (C-== (M-value-expression (leftoperand comparison) state)
+                                                                     (M-value-expression (rightoperand comparison) state)))
+                            ((eq? '<= (comparator comparison)) (C-<= (M-value-expression (leftoperand comparison) state)
+                                                                     (M-value-expression (rightoperand comparison) state)))
+                            ((eq? '>= (comparator comparison)) (C->= (M-value-expression (leftoperand comparison) state)
+                                                                     (M-value-expression (rightoperand comparison) state)))
+                            ((eq? '!= (comparator comparison)) (C-!= (M-value-expression (leftoperand comparison) state)
+                                                                     (M-value-expression (rightoperand comparison) state)))
+                            (else (M-value-expression comparison state))))
       (else (M-value-expression comparison state)))))
 
 ; A comparison will not change the state (for now)
 (define M-state-comparison
   (lambda (comparison state) state))
 
+(define conditional-operators '(< > == <= >= !=))
 
 ;;;; EXPRESSION
 ;; -----------------------------------------------------------------------
@@ -213,7 +218,8 @@
                                                 (M-value-expression (rightoperand expression) state)))
       ((eq? '% (operator expression)) (modulo (M-value-expression (leftoperand expression) state)
                                               (M-value-expression (rightoperand expression) state)))
-      (else (print expression) (error 'badop "The operator is unknown")))))
+      (else (print expression)
+            (error 'badop "The operator is unknown")))))
 
 ; A mathematical expression will not change the state (for now)
 (define M-state-expression
@@ -231,7 +237,7 @@
     (true? (and (C-true? loperand) (C-true? roperand)))))
 (define C-or
   (lambda (loperand roperand)
-    (true? (or (eq? loperand 'true) (eq? roperand 'true)))))
+    (true? (or (C-true? loperand) (C-true? roperand)))))
 (define C-not
   (lambda (operand)
     (true? (eq? operand 'false))))
@@ -325,4 +331,13 @@
     (cond
       [(eq? value 'true) #t]
       [(eq? value 'false) #f]
-      [else (error "Cannot cast to boolean")])))
+      [else (print value) (error "Cannot cast to boolean")])))
+
+; Return true if x is in l
+(define in?
+  (lambda (x l)
+    (cond
+      [(null? l) #f]
+      [(eq? (car l) x) #t]
+      [else (in? x (cdr l))])))
+
