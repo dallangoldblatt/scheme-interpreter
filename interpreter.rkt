@@ -58,6 +58,7 @@
   (lambda (statement-list state) state
     (cond
       ((null? statement-list) state)
+      ((not (eq? (S-lookup 'return state) 'null)) state)
       (else (M-state-statement-list (remaining-statements statement-list) (M-state-statement (first-statement statement-list) state))))))
 
 ; Statement abstractions
@@ -102,7 +103,6 @@
     (S-assign (assign-name statement) (M-value-expression (assign-expression statement) state) state)))
 
 ; Calculate the state resulting from an if statement
-; TODO handle return statements within an if (done by checking if return no longer is #f?
 (define M-state-if
   (lambda (statement state)
     (cond
@@ -111,12 +111,12 @@
       (else state))))
 
 ; Calculate the state resulting from a while statement
-; TODO handle return statements within a while (done by checking if return no longer is #f?
 (define M-state-while
   (lambda (statement state)
     (cond
       ((C-true? (M-value-conditional (while-condtion statement) state))
        (M-state-while statement (M-state-statement (while-statement statement) state)))
+      ((not (eq? (S-lookup 'return state) 'null)) state)
       (else state))))
 
 ; Statement abstractions
