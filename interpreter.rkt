@@ -40,6 +40,10 @@
 ;; Condtional: C-
 ;; State:      S-
 
+;; -----------------------------------------------------------------------
+;;;; The state is stored as a list of lists:
+;; ((x 12) (y 4) ...)
+
 
 ;;;; STATEMENT LIST
 ;; -----------------------------------------------------------------------
@@ -81,7 +85,7 @@
       ((eq? 'while (statement-type statement)) (M-state-while statement state))
       (else state))))
 
-; Calculate the state resulting from a return statement
+; Calculate the state resulting from a return statement and assign it to 'return
 (define M-state-return
   (lambda (statement state)
     (S-assign 'return (M-value-expression (return-expression statement) state) state)))
@@ -91,7 +95,7 @@
   (lambda (statement state)
     (if (declare-has-assignment? statement)
         (S-assign (declare-name statement) (M-value-expression (declare-expression statement) state) state)
-        (S-assign (declare-name statement) #f state)))) ; TODO initialize vars to #f?
+        (S-assign (declare-name statement) #f state)))) ; TODO initialize vars to #f? Maybe initialize them to 'null
 
 ; Calculate the state resulting from an assign statement
 (define M-state-assign
@@ -225,7 +229,7 @@
 
 (define C-and
   (lambda (loperand roperand)
-    (true? (and (eq? loperand 'true) (eq? roperand 'true)))))
+    (true? (and (C-true? loperand) (C-true? roperand)))))
 (define C-or
   (lambda (loperand roperand)
     (true? (or (eq? loperand 'true) (eq? roperand 'true)))))
@@ -316,7 +320,10 @@
         'true
         'false)))
 
-; Convert a 'true or 'false to #t or #f
+; Convert a 'true or 'false to #t or #f, throws error if other value is encountered
 (define C-true?
   (lambda (value)
-    (eq? value 'true)))
+    (cond
+      [(eq? value 'true) #t]
+      [(eq? value 'false) #f]
+      [else (error "Cannot cast to boolean")])))
