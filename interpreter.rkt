@@ -82,9 +82,6 @@
 ;; -----------------------------------------------------------------------
 ; Calculate the value or resulting state of a particular statement
 
-; The following statement types should have a return value for side effects:
-;   declaration, assignment, return
-
 ; Calculate the state resulting from a genereric statement
 (define M-state-statement
   (lambda (statement state)
