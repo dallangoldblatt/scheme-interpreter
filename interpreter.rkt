@@ -298,7 +298,7 @@
 
 ; Return a new state with a null return variable
 (define S-new
-  (lambda () (S-add' return 'null '())))
+  (lambda () (S-add' return 'null empty-state)))
 
 ; Search for a variable by name in the state and return its value
 ; Creates an error if the state does not contain the variable or if the variable is unassigned
@@ -336,7 +336,7 @@
 (define S-remove
   (lambda (variable state)
     (cond 
-      ((null? state) '())
+      ((null? state) empty-state)
       ((eq? variable (first-var state)) (remaining-bindings state))
       (else (cons (first-binding state) (S-remove variable (remaining-bindings state)))))))
 
@@ -345,6 +345,7 @@
 (define first-val cadar)
 (define first-binding car)
 (define remaining-bindings cdr)
+(define empty-state '())
 
   
 ;; Utility functions
