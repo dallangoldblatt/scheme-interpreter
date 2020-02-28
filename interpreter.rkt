@@ -13,7 +13,10 @@
 ; Entrypoint into the interpreter
 (define interpret
   (lambda (file)
-    (S-lookup 'return (M-state-statement-list (parser file) (S-new)))))
+    (M-state-statement-list (parser file)
+                            (S-new)
+                            (lambda (return) (S-lookup 'return return))
+                            (lambda (normal) (S-lookup 'return normal)))))
 
 
 ;;;: M-quantity and M-state definitions
@@ -63,12 +66,17 @@
     
 ; Calculate the state resulting from a statement list
 (define M-state-statement-list
-  (lambda (statement-list state) state
+  (lambda (statement-list state return normal)
     (cond
-      ((null? statement-list) state)
-      ((return-assigned? state) state)
-      (else (M-state-statement-list (remaining-statements statement-list)
-                                    (M-state-statement (first-statement statement-list) state))))))
+      ((null? statement-list) (normal state))
+      (else (M-state-statement (first-statement statement-list)
+                               state
+                               return
+                               (lambda (normal-state)
+                                 (M-state-statement-list (remaining-statements statement-list)
+                                                         normal-state
+                                                         return
+                                                         normal)))))))
 
 ; Statement list abstractions
 (define first-statement-type caar)
@@ -85,54 +93,77 @@
 
 ; Calculate the state resulting from a genereric statement
 (define M-state-statement
-  (lambda (statement state)
+  (lambda (statement state return normal)
     (cond
-      ((eq? 'return (statement-type statement)) (M-state-return statement state))
-      ((eq? 'var (statement-type statement)) (M-state-declare statement state))
-      ((eq? '= (statement-type statement)) (M-state-assign statement state))
-      ((eq? 'if (statement-type statement)) (M-state-if statement state))
-      ((eq? 'while (statement-type statement)) (M-state-while statement state))
-      (else state))))
+      ((eq? 'return (statement-type statement)) (M-state-return statement state return))
+      ((eq? 'var (statement-type statement)) (M-state-declare statement state normal))
+      ((eq? '= (statement-type statement)) (M-state-assign statement state normal))
+      ((eq? 'if (statement-type statement)) (M-state-if statement state return normal))
+      ((eq? 'while (statement-type statement)) (M-state-while statement state return normal))
+      (else (normal state)))))
 
 ; Calculate the state resulting from a return expression (assign its value to 'return in the state)
 (define M-state-return
-  (lambda (statement state)
-    (S-assign 'return (M-quantity-expression (return-expression statement) state) state)))
+  (lambda (statement state return)
+    (M-quantity-expression
+     (return-expression statement)
+     state
+     (lambda (v)
+       (return (S-assign 'return v state))))))
 
 ; Calculate the state resulting from a declare statement
 ; Declared but un-assigned variables have the value 'null
 (define M-state-declare
-  (lambda (statement state)
+  (lambda (statement state normal)
     (cond
       ((S-name? (declare-name statement) state)
        (error "Variable already declared:" (declare-name statement)))
       ((declare-has-assignment? statement)
-       (S-add (declare-name statement) (M-quantity-expression (declare-expression statement) state) state))
-      (else (S-add (declare-name statement) 'null state)))))
+       (M-quantity-expression (declare-expression statement)
+                              state
+                              (lambda (v)
+                                (normal (S-add (declare-name statement) v state)))))
+      (else (normal (S-add (declare-name statement) 'null state))))))
 
 ; Calculate the state resulting from an assign statement
 (define M-state-assign
-  (lambda (statement state)
-    (S-assign (assign-name statement) (M-quantity-expression (assign-expression statement) state) state)))
+  (lambda (statement state normal)
+    (M-quantity-expression (assign-expression statement)
+                           state
+                           (lambda (v)
+                             (normal (S-assign (assign-name statement) v state))))))
 
 ; Calculate the state resulting from an if statement
 (define M-state-if
-  (lambda (statement state)
-    (cond
-      ((true? (M-quantity-expression (if-condtion statement) state))
-       (M-state-statement (if-statement statement) state)) ; Calculate the state resulting from the if block
-      ((if-has-else? statement)
-       (M-state-statement (else-statement statement) state)) ; Calculate the state resulting from the else block
-      (else state))))
+  (lambda (statement state return normal)
+    ; Calulate if condition
+    (M-quantity-expression (if-condition statement)
+                           state
+                           (lambda (condtion)
+                             (cond
+                               ((true? condtion)
+                                (M-state-statement (if-statement statement) state return normal))
+                               ((if-has-else? statement)
+                                (M-state-statement (else-statement statement) state return normal))
+                               (else (normal state)))))))
 
 ; Calculate the state resulting from a while statement
 (define M-state-while
-  (lambda (statement state)
-    (cond
-      ((true? (M-quantity-expression (while-condtion statement) state))
-       (M-state-while statement (M-state-statement (while-statement statement) state)))
-      ((not (eq? (S-lookup 'return state) 'null)) state)
-      (else state))))
+  (lambda (statement state return normal)
+    ; Calulate while condition
+    (M-quantity-expression (while-condition statement)
+                           state
+                           (lambda (condition)
+                             (if (true? condition)
+                                 (M-state-statement(while-statement statement)
+                                                   state
+                                                   return
+                                                   (lambda (normal-state)
+                                                     (M-state-while statement
+                                                                    normal-state
+                                                                    return
+                                                                    normal)))
+                                 (normal state))))))
 
 ; Statement abstractions
 (define statement-type car)
@@ -141,10 +172,10 @@
 (define declare-expression caddr)
 (define assign-name cadr)
 (define assign-expression caddr)
-(define if-condtion cadr)
+(define if-condition cadr)
 (define if-statement caddr)
 (define else-statement cadddr)
-(define while-condtion cadr)
+(define while-condition cadr)
 (define while-statement caddr)
 
 ; Determine if an if statement includes the optional else
@@ -163,11 +194,11 @@
 ;; Expressions have the value of {integer, 'true, 'false, error} and do not change the state
 
 (define M-quantity-expression
-  (lambda (expression state)
+  (lambda (expression state value-cont)
     (cond
       ((null? expression) (error "Null parameter passed to M-quantity-expression"))
-      ((logical-calculation? expression) (M-quantity-conditional expression state))
-      (else (M-quantity-term expression state)))))
+      ((logical-calculation? expression) (M-quantity-conditional expression state value-cont))
+      (else (M-quantity-term expression state value-cont)))))
 
 
 ;;;; CONDITIONAL
@@ -175,15 +206,29 @@
 ;; Conditionals return 'true or 'false and connect one or more COMPARISONs
 
 (define M-quantity-conditional
-  (lambda (conditional state)
+  (lambda (conditional state value-cont)
     (cond
+      
       ((null? conditional) (error "Null parameter passed to M-quantity-conditional"))
-      ((eq? '&& (connective conditional)) (C-and (M-quantity-expression (leftoperand conditional) state)
-                                                 (M-quantity-expression (rightoperand conditional) state)))
-      ((eq? '|| (connective conditional)) (C-or (M-quantity-expression (leftoperand conditional) state)
-                                                (M-quantity-expression (rightoperand conditional) state)))
-      ((eq? '! (connective conditional)) (C-not (M-quantity-expression (unaryoperand conditional) state)))
-      (else (M-quantity-comparison conditional state)))))
+      ((eq? '&& (connective conditional)) (M-quantity-expression (leftoperand conditional)
+                                                                  state
+                                                                  (lambda (v1)
+                                                                    (M-quantity-expression (rightoperand conditional)
+                                                                                           state
+                                                                                           (lambda (v2)
+                                                                                             (value-cont (C-and v1 v2)))))))
+      ((eq? '|| (connective conditional)) (M-quantity-expression (leftoperand conditional)
+                                                                 state
+                                                                 (lambda (v1)
+                                                                   (M-quantity-expression (rightoperand conditional)
+                                                                                          state
+                                                                                          (lambda (v2)
+                                                                                            (value-cont (C-or v1 v2)))))))
+      ((eq? '! (connective conditional)) (M-quantity-expression (leftoperand conditional)
+                                                                state
+                                                                (lambda (v)
+                                                                  (value-cont (C-not v)))))
+      (else (M-quantity-comparison conditional state value-cont)))))
 
 
 ;;;; COMPARISON
@@ -191,22 +236,23 @@
 ;; Comparisons return 'true or 'false and compare TERMs
 
 (define M-quantity-comparison
-  (lambda (comparison state)
-    (cond
-      ((null? comparison) (error "Null parameter passed to M-quantity-comparison"))
-      ((eq? '< (comparator comparison)) (C-< (M-quantity-term (leftoperand comparison) state)
-                                             (M-quantity-term (rightoperand comparison) state)))
-      ((eq? '> (comparator comparison)) (C-> (M-quantity-term (leftoperand comparison) state)
-                                             (M-quantity-term (rightoperand comparison) state)))
-      ((eq? '== (comparator comparison)) (C-== (M-quantity-term (leftoperand comparison) state)
-                                               (M-quantity-term (rightoperand comparison) state)))
-      ((eq? '<= (comparator comparison)) (C-<= (M-quantity-term (leftoperand comparison) state)
-                                               (M-quantity-term (rightoperand comparison) state)))
-      ((eq? '>= (comparator comparison)) (C->= (M-quantity-term (leftoperand comparison) state)
-                                               (M-quantity-term (rightoperand comparison) state)))
-      ((eq? '!= (comparator comparison)) (C-!= (M-quantity-term (leftoperand comparison) state)
-                                               (M-quantity-term (rightoperand comparison) state)))
-      (else (error "The operator is unknown:" (comparator comparison))))))
+  (lambda (comparison state value-cont)
+    (if (null? comparison)
+        (error "Null parameter passed to M-quantity-comparison")
+        (M-quantity-term (leftoperand comparison)
+                         state
+                         (lambda (v1)
+                           (M-quantity-term (rightoperand comparison)
+                                            state
+                                            (lambda (v2)
+                                              (cond
+                                                ((eq? '< (comparator comparison)) (value-cont (C-< v1 v2)))
+                                                ((eq? '> (comparator comparison)) (value-cont (C-> v1 v2)))
+                                                ((eq? '== (comparator comparison)) (value-cont (C-== v1 v2)))
+                                                ((eq? '<= (comparator comparison)) (value-cont (C-<= v1 v2)))
+                                                ((eq? '>= (comparator comparison)) (value-cont (C->= v1 v2)))
+                                                ((eq? '!= (comparator comparison)) (value-cont (C-!= v1 v2)))
+                                                (else (error "The operator is unknown:" (comparator comparison)))))))))))
 
 
 ;;;; Terms
@@ -215,27 +261,31 @@
     
 ; Calculate the value of a mathematical expression
 (define M-quantity-term
-  (lambda (term state)
+  (lambda (term state value-cont)
     (cond
       ((null? term) (error "Null parameter passed to M-quantity-term"))
-      ((C-boolean? term) term)
-      ((number? term) term)
+      ((C-boolean? term) (value-cont term))
+      ((number? term) (value-cont term))
       ((S-unassigned? term state)
        (error "Variable referenced before assignment:" term))
-      ((atom? term) (S-lookup term state))
-      ((negation? term) (* -1
-                           (M-quantity-term (unaryoperand term) state)))
-      ((eq? '+ (operator term)) (+ (M-quantity-term (leftoperand term) state)
-                                   (M-quantity-term (rightoperand term) state)))
-      ((eq? '- (operator term)) (- (M-quantity-term (leftoperand term) state)
-                                   (M-quantity-term (rightoperand term) state)))
-      ((eq? '* (operator term)) (* (M-quantity-term (leftoperand term) state)
-                                   (M-quantity-term (rightoperand term) state)))
-      ((eq? '/ (operator term)) (quotient (M-quantity-term (leftoperand term) state)
-                                          (M-quantity-term (rightoperand term) state)))
-      ((eq? '% (operator term)) (remainder (M-quantity-term (leftoperand term) state)
-                                           (M-quantity-term (rightoperand term) state)))
-      (else (error "The operator is unknown:" (operator term))))))
+      ((atom? term) (value-cont (S-lookup term state)))
+      ((negation? term) (M-quantity-term (unaryoperand term)
+                                         state
+                                         (lambda (v)
+                                           (value-cont (* -1 v)))))
+      (else (M-quantity-term (leftoperand term)
+                             state
+                             (lambda (v1)
+                               (M-quantity-term (rightoperand term)
+                                                state
+                                                (lambda (v2)
+                                                  (cond
+                                                    ((eq? '+ (operator term)) (value-cont (+ v1 v2)))
+                                                    ((eq? '- (operator term)) (value-cont (- v1 v2)))
+                                                    ((eq? '* (operator term)) (value-cont (* v1 v2)))
+                                                    ((eq? '/ (operator term)) (value-cont (quotient v1 v2)))
+                                                    ((eq? '% (operator term)) (value-cont (remainder v1 v2)))
+                                                    (else (error "The operator is unknown:" (operator term))))))))))))
 
 ; Conditional, comparison, and term abstractions
 (define comparator car)
