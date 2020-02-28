@@ -211,12 +211,12 @@
       
       ((null? conditional) (error "Null parameter passed to M-quantity-conditional"))
       ((eq? '&& (connective conditional)) (M-quantity-expression (leftoperand conditional)
-                                                                  state
-                                                                  (lambda (v1)
-                                                                    (M-quantity-expression (rightoperand conditional)
-                                                                                           state
-                                                                                           (lambda (v2)
-                                                                                             (value-cont (C-and v1 v2)))))))
+                                                                 state
+                                                                 (lambda (v1)
+                                                                   (M-quantity-expression (rightoperand conditional)
+                                                                                          state
+                                                                                          (lambda (v2)
+                                                                                            (value-cont (C-and v1 v2)))))))
       ((eq? '|| (connective conditional)) (M-quantity-expression (leftoperand conditional)
                                                                  state
                                                                  (lambda (v1)
@@ -350,17 +350,22 @@
 
 ;;;; State functions
 ;; -----------------------------------------------------------------------
+; The state has the form: '(layer1 layer2)
+; A layer has the form:   '((var1 var2...) (val1 val2...))
+; Example with 2 layers:  '(((x y z) (1 2 3)) ((w) (2)))
 
 ; Return a new state with a null return variable
 (define S-new
-  (lambda () (S-add 'return 'null empty-state)))
+  (lambda () (S-add 'return 'null (S-push-layer empty-layer empty-state))))
 
 ; Search for a variable by name in the state and return its value
+; Searches layers in sequence
 ; Creates an error if the state does not contain the variable
 (define S-lookup
   (lambda (variable state)
     (cond 
       ((null? state) (error "Variable referenced before declaration:" variable))
+      ((S-layer-null? (first-layer state)) (S-lookup variable (remaining-layers state)))
       ((eq? variable (first-var state)) (first-val state))
       (else (S-lookup variable (remaining-bindings state))))))
 
@@ -369,31 +374,36 @@
   (lambda (variable state)
     (cond
       ((null? state) #f)
+      ((S-layer-null? (first-layer state)) (S-name? variable (remaining-layers state)))
       ((eq? variable (first-var state)) #t)
       (else (S-name? variable (remaining-bindings state))))))
   
 ; Update the value of a variable in the state
+; The first occuance of the varible in the highest layer is changed
 ; If it does not exist, then return an error
 (define S-assign
   (lambda (variable value state)
     (cond 
       ((null? state) (error "Variable assigned before declaration:" variable))
-      ((eq? variable (first-var state)) (S-add variable value (S-remove variable state)))
-      (else (cons (first-binding state) (S-assign variable value (remaining-bindings state)))))))
+      ((in? variable (first-layer-variables state)) (S-add variable value (S-remove variable state)))
+      (else (S-push-layer (first-layer state) (S-assign variable value (remaining-layers state)))))))
 
-; Add a new variable and value to the state
+; Add a new variable and value to the first layer of the state
 (define S-add
   (lambda (variable value state)
-    (cons (list variable value) state)))
+    (S-push-layer (list (cons variable (first-layer-variables state))
+                        (cons value (first-layer-values state)))
+                  (remaining-layers state))))
 
-; Remove a variable from the state
+; Remove a the first occurance of a variable from the a layer of the state
 ; If the variable is already not present, no error is created
 (define S-remove
   (lambda (variable state)
-    (cond 
+    (cond
       ((null? state) empty-state)
+      ((S-layer-null? (first-layer state)) (S-push-layer empty-layer (S-remove variable (remaining-layers state))))
       ((eq? variable (first-var state)) (remaining-bindings state))
-      (else (cons (first-binding state) (S-remove variable (remaining-bindings state)))))))
+      (else (S-add (first-var state) (first-val state) (S-remove variable (remaining-bindings state)))))))
 
 ; Check if a variable has been declared but not assigned a value
 (define S-unassigned?
@@ -401,12 +411,36 @@
     (and (S-name? term state)
          (eq? 'null (S-lookup term state)))))
 
+; Check if the a layer is empty
+(define S-layer-null?
+  (lambda (layer)
+    (null? (car layer))))
+
+; Add a layer onto the state
+(define S-push-layer
+  (lambda (layer state)
+    (cons layer state)))
+
+; Remove the first layer from the state
+(define S-pop-layer
+  (lambda (state)
+    (remaining-layers state)))
+
 ; State abstractions
-(define first-var caar)
-(define first-val cadar)
-(define first-binding car)
-(define remaining-bindings cdr)
+(define first-var caaar)
+(define first-val caadar)
+(define first-layer car)
+(define first-layer-variables caar)
+(define first-layer-values cadar)
+(define remaining-layers cdr)
+
+(define remaining-bindings
+  (lambda (state)
+    (cons (map cdr (first-layer state))
+          (remaining-layers state))))
+
 (define empty-state '())
+(define empty-layer '(() ()))
 
   
 ;; Utility functions
