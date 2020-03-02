@@ -1,0 +1,27 @@
+#lang racket
+
+(require test-engine/racket-tests)
+(require "../../interpreter.rkt")
+
+(check-expect (interpret "test1.txt") 150)
+(check-expect (interpret "test2.txt") -4)
+(check-expect (interpret "test3.txt") 10)
+(check-expect (interpret "test4.txt") 16)
+(check-expect (interpret "test5.txt") 220)
+(check-expect (interpret "test6.txt") 5)
+(check-expect (interpret "test7.txt") 6)
+(check-expect (interpret "test8.txt") 10)
+(check-expect (interpret "test9.txt") 5)
+(check-expect (interpret "test10.txt") -39)
+(check-error (interpret "test11.txt") "Variable assigned before declaration: y")
+(check-error (interpret "test12.txt") "Variable referenced before declaration: x")
+(check-error (interpret "test13.txt") "Variable referenced before assignment: x")
+(check-error (interpret "test14.txt") "Variable already declared: x")
+(check-expect (interpret "test15.txt") 'true)
+(check-expect (interpret "test16.txt") 100)
+(check-expect (interpret "test17.txt") 'false)
+(check-expect (interpret "test18.txt") 'true)
+(check-expect (interpret "test19.txt") 128)
+(check-expect (interpret "test20.txt") 12)
+
+(test)

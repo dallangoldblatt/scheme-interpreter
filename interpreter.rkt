@@ -3,7 +3,7 @@
 (require "simpleParser.rkt")
 (provide (all-defined-out))
 
-;;;; Interpreter, Part 1
+;;;; Interpreter, Part 2
 ;; -----------------------------------------------------------------------
 ; Dallan Goldblatt
 ; Robbie Dozier
@@ -15,8 +15,11 @@
   (lambda (file)
     (M-state-statement-list (parser file)
                             (S-new)
-                            (lambda (return) (S-lookup 'return return))
-                            (lambda (normal) (S-lookup 'return normal)))))
+                            (lambda (return) return)
+                            (lambda (break) (error "Break encountered without enclosing loop"))
+                            (lambda (continue) (error "Continue encountered without enclosing loop"))
+                            (lambda (throw) (throw))
+                            (lambda (normal) (error "Program ended without return")))))
 
 
 ;;;: M-quantity and M-state definitions
@@ -66,25 +69,28 @@
     
 ; Calculate the state resulting from a statement list
 (define M-state-statement-list
-  (lambda (statement-list state return normal)
+  (lambda (statement-list state return break continue throw normal)
     (cond
-      ((null? statement-list) (normal state))
+      ((null? statement-list) (normal (S-pop-layer state)))
       (else (M-state-statement (first-statement statement-list)
                                state
                                return
+                               break
+                               continue
+                               throw
                                (lambda (normal-state)
                                  (M-state-statement-list (remaining-statements statement-list)
                                                          normal-state
                                                          return
+                                                         break
+                                                         continue
+                                                         throw
                                                          normal)))))))
 
 ; Statement list abstractions
 (define first-statement-type caar)
 (define first-statement car)
 (define remaining-statements cdr)
-(define return-assigned?
-  (lambda (state)
-    (not (eq? (S-lookup 'return state) 'null))))
 
 
 ;;;; STATEMENT
@@ -93,23 +99,44 @@
 
 ; Calculate the state resulting from a genereric statement
 (define M-state-statement
-  (lambda (statement state return normal)
+  (lambda (statement state return break continue throw normal)
     (cond
+      ((eq? 'begin (statement-type statement)) (M-state-begin statement state return break continue throw normal))
       ((eq? 'return (statement-type statement)) (M-state-return statement state return))
+      ((eq? 'break (statement-type statement)) (break (S-pop-layer state)))
+      ((eq? 'continue (statement-type statement)) (continue (S-pop-layer state)))
+      ((eq? 'try (statement-type statement)) (error "TODO"))
+      ((eq? 'throw (statement-type statement)) (error "TODO"))
       ((eq? 'var (statement-type statement)) (M-state-declare statement state normal))
       ((eq? '= (statement-type statement)) (M-state-assign statement state normal))
-      ((eq? 'if (statement-type statement)) (M-state-if statement state return normal))
-      ((eq? 'while (statement-type statement)) (M-state-while statement state return normal))
+      ((eq? 'if (statement-type statement)) (M-state-if statement state return break continue throw normal))
+      ((eq? 'while (statement-type statement)) (M-state-while statement
+                                                              state
+                                                              return
+                                                              (lambda (break-state) (normal break-state))
+                                                              continue
+                                                              throw
+                                                              normal))
       (else (normal state)))))
 
-; Calculate the state resulting from a return expression (assign its value to 'return in the state)
+; Calculate the state resulting from a begin block
+(define M-state-begin
+  (lambda (statement state return break continue throw normal)
+    (M-state-statement-list (begin-block statement)
+                             (S-push-layer empty-layer state)
+                             return
+                             break
+                             continue
+                             throw
+                             normal)))
+
+; Calculate the state resulting from a return expression
 (define M-state-return
   (lambda (statement state return)
     (M-quantity-expression
      (return-expression statement)
      state
-     (lambda (v)
-       (return (S-assign 'return v state))))))
+     return)))
 
 ; Calculate the state resulting from a declare statement
 ; Declared but un-assigned variables have the value 'null
@@ -135,38 +162,52 @@
 
 ; Calculate the state resulting from an if statement
 (define M-state-if
-  (lambda (statement state return normal)
+  (lambda (statement state return break continue throw normal)
     ; Calulate if condition
     (M-quantity-expression (if-condition statement)
                            state
                            (lambda (condtion)
                              (cond
                                ((true? condtion)
-                                (M-state-statement (if-statement statement) state return normal))
+                                (M-state-statement (if-statement statement) state return break continue throw normal))
                                ((if-has-else? statement)
-                                (M-state-statement (else-statement statement) state return normal))
+                                (M-state-statement (else-statement statement) state return break continue throw normal))
                                (else (normal state)))))))
 
 ; Calculate the state resulting from a while statement
 (define M-state-while
-  (lambda (statement state return normal)
+  (lambda (statement state return break continue throw normal)
     ; Calulate while condition
     (M-quantity-expression (while-condition statement)
                            state
                            (lambda (condition)
                              (if (true? condition)
-                                 (M-state-statement(while-statement statement)
+                                 (M-state-statement (while-statement statement)
                                                    state
                                                    return
+                                                   break
+                                                   (lambda (continue-state)
+                                                     (M-state-while statement
+                                                                    continue-state
+                                                                    return
+                                                                    break
+                                                                    continue
+                                                                    throw
+                                                                    normal))
+                                                   throw
                                                    (lambda (normal-state)
                                                      (M-state-while statement
                                                                     normal-state
                                                                     return
+                                                                    break
+                                                                    continue
+                                                                    throw
                                                                     normal)))
                                  (normal state))))))
 
 ; Statement abstractions
 (define statement-type car)
+(define begin-block cdr)
 (define return-expression cadr)
 (define declare-name cadr)
 (define declare-expression caddr)
@@ -356,7 +397,7 @@
 
 ; Return a new state with a null return variable
 (define S-new
-  (lambda () (S-add 'return 'null (S-push-layer empty-layer empty-state))))
+  (lambda () (S-push-layer empty-layer empty-state)))
 
 ; Search for a variable by name in the state and return its value
 ; Searches layers in sequence
@@ -374,9 +415,8 @@
   (lambda (variable state)
     (cond
       ((null? state) #f)
-      ((S-layer-null? (first-layer state)) (S-name? variable (remaining-layers state)))
-      ((eq? variable (first-var state)) #t)
-      (else (S-name? variable (remaining-bindings state))))))
+      ((in? variable (first-layer-variables state)) #t)
+      (else (S-name? variable (remaining-layers state))))))
   
 ; Update the value of a variable in the state
 ; The first occuance of the varible in the highest layer is changed
@@ -434,6 +474,7 @@
 (define first-layer-values cadar)
 (define remaining-layers cdr)
 
+; Return the state with the very first var-val binding in the first layer removed
 (define remaining-bindings
   (lambda (state)
     (cons (map cdr (first-layer state))
