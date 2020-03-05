@@ -18,7 +18,7 @@
                             (lambda (return) return)
                             (lambda (break) (error "Break encountered without enclosing loop"))
                             (lambda (continue) (error "Continue encountered without enclosing loop"))
-                            (lambda (throw) (throw))
+                            (lambda (throw) (error "Exception thrown:" throw))
                             (lambda (normal) (error "Program ended without return")))))
 
 
@@ -105,8 +105,14 @@
       ((eq? 'return (statement-type statement)) (M-state-return statement state return))
       ((eq? 'break (statement-type statement)) (break (S-pop-layer state)))
       ((eq? 'continue (statement-type statement)) (continue (S-pop-layer state)))
-      ((eq? 'try (statement-type statement)) (error "TODO"))
-      ((eq? 'throw (statement-type statement)) (error "TODO"))
+
+      
+      ((eq? 'try (statement-type statement)) (M-state-try statement state return break continue throw normal))
+
+      
+      ((eq? 'throw (statement-type statement)) (throw (M-quantity-expression (exception-value statement) state (lambda (val) val))))
+
+
       ((eq? 'var (statement-type statement)) (M-state-declare statement state normal))
       ((eq? '= (statement-type statement)) (M-state-assign statement state normal))
       ((eq? 'if (statement-type statement)) (M-state-if statement state return break continue throw normal))
@@ -137,6 +143,66 @@
      (return-expression statement)
      state
      return)))
+
+; Calculate the state resulting from a try block, which then continues onto a catch or finally block
+(define M-state-try
+  (lambda (statement state return break continue throw normal)
+    (M-state-begin (cons begin-block-ptr (body-block statement))
+                   state
+                   return
+                   break
+                   continue
+                   (lambda (thrown-value) (M-state-catch (catch-statement statement)
+                                                         state
+                                                         thrown-value
+                                                         (lambda (finally-state) (M-state-finally (finally-statement statement)
+                                                                                                  finally-state
+                                                                                                  return
+                                                                                                  break
+                                                                                                  continue
+                                                                                                  throw
+                                                                                                  normal))
+                                                         break
+                                                         continue
+                                                         throw
+                                                         (lambda (finally-state) (M-state-finally (finally-statement statement)
+                                                                                                  finally-state
+                                                                                                  return
+                                                                                                  break
+                                                                                                  continue
+                                                                                                  throw
+                                                                                                  normal))))
+                   (lambda (finally-state) (M-state-finally (finally-statement statement)
+                                                            finally-state
+                                                            return
+                                                            break
+                                                            continue
+                                                            throw
+                                                            normal)))))
+
+; Calculate the state resulting from a catch block
+(define M-state-catch
+  (lambda (statement state thrown-value return break continue throw normal)
+    (M-state-begin (cons begin-block-ptr (catch-body-block statement))
+                   (S-add (exception-name statement) thrown-value state)
+                   return
+                   break
+                   continue
+                   throw
+                   normal)))
+                   
+; Calculate the state resulting from a finally block
+(define M-state-finally
+  (lambda (statement state return break continue throw normal)
+    (if (null? statement)
+        (normal state)
+        (M-state-begin (cons begin-block-ptr (finally-body-block statement))
+                       state
+                       return
+                       break
+                       continue
+                       throw
+                       normal))))
 
 ; Calculate the state resulting from a declare statement
 ; Declared but un-assigned variables have the value 'null
@@ -208,6 +274,7 @@
 ; Statement abstractions
 (define statement-type car)
 (define begin-block cdr)
+(define begin-block-ptr 'begin)
 (define return-expression cadr)
 (define declare-name cadr)
 (define declare-expression caddr)
@@ -218,6 +285,14 @@
 (define else-statement cadddr)
 (define while-condition cadr)
 (define while-statement caddr)
+(define exception-name caadr)
+(define body-block cadr)
+(define catch-statement caddr)
+(define catch-body-block caddr)
+(define exception caadr)
+(define exception-value cadr)
+(define finally-statement cadddr)
+(define finally-body-block cadr)
 
 ; Determine if an if statement includes the optional else
 (define if-has-else?
