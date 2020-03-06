@@ -18,7 +18,7 @@
                             (lambda (return) return)
                             (lambda (break) (error "Break encountered without enclosing loop"))
                             (lambda (continue) (error "Continue encountered without enclosing loop"))
-                            (lambda (throw) (error "Exception thrown:" throw))
+                            (lambda (throw-state throw-value) (error "Exception thrown:" throw-value))
                             (lambda (normal) (error "Program ended without return")))))
 
 
@@ -105,14 +105,8 @@
       ((eq? 'return (statement-type statement)) (M-state-return statement state return))
       ((eq? 'break (statement-type statement)) (break (S-pop-layer state)))
       ((eq? 'continue (statement-type statement)) (continue (S-pop-layer state)))
-
-      
       ((eq? 'try (statement-type statement)) (M-state-try statement state return break continue throw normal))
-
-      
-      ((eq? 'throw (statement-type statement)) (throw (M-quantity-expression (exception-value statement) state (lambda (val) val))))
-
-
+      ((eq? 'throw (statement-type statement)) (throw state (M-quantity-expression (exception-value statement) state (lambda (val) val))))
       ((eq? 'var (statement-type statement)) (M-state-declare statement state normal))
       ((eq? '= (statement-type statement)) (M-state-assign statement state normal))
       ((eq? 'if (statement-type statement)) (M-state-if statement state return break continue throw normal))
@@ -152,8 +146,8 @@
                    return
                    break
                    continue
-                   (lambda (thrown-value) (M-state-catch (catch-statement statement)
-                                                         state
+                   (lambda (throw-state thrown-value) (M-state-catch (catch-statement statement)
+                                                         (S-pop-layer throw-state)
                                                          thrown-value
                                                          (lambda (finally-state) (M-state-finally (finally-statement statement)
                                                                                                   finally-state
