@@ -21,6 +21,6 @@
 (check-expect (interpret "test16.txt") 110)
 (check-expect (interpret "test17.txt") 2000400)
 (check-expect (interpret "test18.txt") 101)
-(check-error (interpret "test19.txt") "error")
+(check-error (interpret "test19.txt") "Exception thrown: 1")
 
 (test)
