@@ -101,22 +101,22 @@
 (define M-state-statement
   (lambda (statement state return break continue throw normal)
     (cond
-      ((eq? 'begin (statement-type statement)) (M-state-begin statement state return break continue throw normal))
-      ((eq? 'return (statement-type statement)) (M-state-return statement state return))
-      ((eq? 'break (statement-type statement)) (break (S-pop-layer state)))
+      ((eq? 'begin (statement-type statement))    (M-state-begin statement state return break continue throw normal))
+      ((eq? 'return (statement-type statement))   (M-state-return statement state return))
+      ((eq? 'break (statement-type statement))    (break (S-pop-layer state)))
       ((eq? 'continue (statement-type statement)) (continue (S-pop-layer state)))
-      ((eq? 'try (statement-type statement)) (M-state-try statement state return break continue throw normal))
-      ((eq? 'throw (statement-type statement)) (throw state (M-quantity-expression (exception-value statement) state (lambda (val) val))))
-      ((eq? 'var (statement-type statement)) (M-state-declare statement state normal))
-      ((eq? '= (statement-type statement)) (M-state-assign statement state normal))
-      ((eq? 'if (statement-type statement)) (M-state-if statement state return break continue throw normal))
-      ((eq? 'while (statement-type statement)) (M-state-while statement
-                                                              state
-                                                              return
-                                                              (lambda (break-state) (normal break-state))
-                                                              continue
-                                                              throw
-                                                              normal))
+      ((eq? 'try (statement-type statement))      (M-state-try statement state return break continue throw normal))
+      ((eq? 'throw (statement-type statement))    (throw state (M-quantity-expression (exception-value statement) state (lambda (val) val))))
+      ((eq? 'var (statement-type statement))      (M-state-declare statement state normal))
+      ((eq? '= (statement-type statement))        (M-state-assign statement state normal))
+      ((eq? 'if (statement-type statement))       (M-state-if statement state return break continue throw normal))
+      ((eq? 'while (statement-type statement))    (M-state-while statement
+                                                                 state
+                                                                 return
+                                                                 (lambda (break-state) (normal break-state))
+                                                                 continue
+                                                                 throw
+                                                                 normal))
       (else (normal state)))))
 
 ; Calculate the state resulting from a begin block
@@ -135,15 +135,21 @@
   (lambda (statement state return)
     (M-quantity-expression
      (return-expression statement)
-     state
-     return)))
+     (return state)
+     identity)))
 
 ; Calculate the state resulting from a try block, which then continues onto a catch or finally block
 (define M-state-try
   (lambda (statement state return break continue throw normal)
     (M-state-begin (cons begin-block-ptr (body-block statement))
                    state
-                   return
+                   (lambda (finally-state) (M-state-finally (finally-statement statement)
+                                                            finally-state
+                                                            return
+                                                            break
+                                                            continue
+                                                            throw
+                                                            normal))
                    break
                    continue
                    (lambda (throw-state thrown-value) (M-state-catch (catch-statement statement)
@@ -179,7 +185,13 @@
   (lambda (statement state thrown-value return break continue throw normal)
     (M-state-begin (cons begin-block-ptr (catch-body-block statement))
                    (S-add (exception-name statement) thrown-value state)
-                   return
+                   (lambda (finally-state) (M-state-finally (finally-statement statement)
+                                                                                                  finally-state
+                                                                                                  return
+                                                                                                  break
+                                                                                                  continue
+                                                                                                  throw
+                                                                                                  normal))
                    break
                    continue
                    throw
