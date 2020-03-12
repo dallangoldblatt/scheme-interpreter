@@ -143,7 +143,13 @@
   (lambda (statement state return break continue throw normal)
     (M-state-begin (cons begin-block-ptr (body-block statement))
                    state
-                   return
+                   (lambda (retval) (M-state-finally (finally-statement statement)
+                                                     (S-add 'return (M-quantity-expression retval state identity) state)
+                                                     return
+                                                     break
+                                                     continue
+                                                     throw
+                                                     normal))
                    break
                    continue
                    (lambda (throw-state thrown-value) (M-state-catch (catch-statement statement)
@@ -196,7 +202,9 @@
                        break
                        continue
                        throw
-                       normal))))
+                       (lambda (v) (if (S-name? 'return state)
+                                       (return (S-lookup 'return state))
+                                       (normal v)))))))
 
 ; Calculate the state resulting from a declare statement
 ; Declared but un-assigned variables have the value 'null

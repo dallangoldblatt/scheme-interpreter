@@ -1,0 +1,8 @@
+var x = 0;
+try {
+  x = 5;
+} finally {
+  x = x - 2;
+}
+return x;
+
