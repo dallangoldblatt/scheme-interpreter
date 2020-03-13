@@ -30,13 +30,14 @@
 ; The M-state functions return the state resulting from a statement
 ;     M-state: statement X state -> {state, error}
 ;
-; state is stored as a list of tuples in the format (name value):
-;     ((x 12) (y 4) ...);
+; The state is a list of layers
+; Each layer contains a list of variables and their bindings:
+;     (((x y z) (1 2 3)) (a b c) (4 5 6)))
 
 
 ;;;; STATEMENT FORMATS
 ;; -----------------------------------------------------------------------
-;; Atoms in UPPERCASE can implement M-state and/or M-quantity
+;; Atoms in UPPERCASE can implement M-state and/or M-quantity functions
 ;; Symbols and atoms in lowercase are part of the language
 
 ;; Variable declaration
@@ -50,11 +51,19 @@
 ; (return EXPRESSION)
 
 ;; If statement
-; (if EXPRESSION then STATEMENT)
-; (if EXPRESSION then STATEMENT else STATEMENT)
+; (if EXPRESSION then STATEMENT_LIST)
+; (if EXPRESSION then STATEMENT_LIST else STATEMENT_LIST)
 
 ;; While statement
-; (while EXPRESSION STATEMENT)
+; (while EXPRESSION STATEMENT_LIST)
+
+;; Control statements
+; (break)
+; (continue)
+; (throw e)
+
+;; Try statement
+; (try STATEMENT_LIST (catch (e) STATEMENT_LIST) (finally STATEMENT_LIST))
 
 
 ;; -----------------------------------------------------------------------
@@ -110,25 +119,19 @@
       ((eq? 'var (statement-type statement)) (M-state-declare statement state normal))
       ((eq? '= (statement-type statement)) (M-state-assign statement state normal))
       ((eq? 'if (statement-type statement)) (M-state-if statement state return break continue throw normal))
-      ((eq? 'while (statement-type statement)) (M-state-while statement
-                                                              state
-                                                              return
-                                                              (lambda (break-state) (normal break-state))
-                                                              continue
-                                                              throw
-                                                              normal))
+      ((eq? 'while (statement-type statement)) (M-state-while statement state return (lambda (break-state) (normal break-state)) continue throw normal))
       (else (normal state)))))
 
 ; Calculate the state resulting from a begin block
 (define M-state-begin
   (lambda (statement state return break continue throw normal)
     (M-state-statement-list (begin-block statement)
-                             (S-push-layer empty-layer state)
-                             return
-                             break
-                             continue
-                             throw
-                             normal)))
+                            (S-push-layer empty-layer state)
+                            return
+                            break
+                            continue
+                            throw
+                            normal)))
 
 ; Calculate the state resulting from a return expression
 (define M-state-return
@@ -153,25 +156,25 @@
                    break
                    continue
                    (lambda (throw-state thrown-value) (M-state-catch (catch-statement statement)
-                                                         (S-pop-layer throw-state)
-                                                         thrown-value
-                                                         (lambda (finally-state) (M-state-finally (finally-statement statement)
-                                                                                                  finally-state
-                                                                                                  return
-                                                                                                  break
-                                                                                                  continue
-                                                                                                  throw
-                                                                                                  normal))
-                                                         break
-                                                         continue
-                                                         throw
-                                                         (lambda (finally-state) (M-state-finally (finally-statement statement)
-                                                                                                  finally-state
-                                                                                                  return
-                                                                                                  break
-                                                                                                  continue
-                                                                                                  throw
-                                                                                                  normal))))
+                                                                     (S-pop-layer throw-state)
+                                                                     thrown-value
+                                                                     (lambda (finally-state) (M-state-finally (finally-statement statement)
+                                                                                                              finally-state
+                                                                                                              return
+                                                                                                              break
+                                                                                                              continue
+                                                                                                              throw
+                                                                                                              normal))
+                                                                     break
+                                                                     continue
+                                                                     throw
+                                                                     (lambda (finally-state) (M-state-finally (finally-statement statement)
+                                                                                                              finally-state
+                                                                                                              return
+                                                                                                              break
+                                                                                                              continue
+                                                                                                              throw
+                                                                                                              normal))))
                    (lambda (finally-state) (M-state-finally (finally-statement statement)
                                                             finally-state
                                                             return
@@ -251,26 +254,26 @@
                            (lambda (condition)
                              (if (true? condition)
                                  (M-state-statement (while-statement statement)
-                                                   state
-                                                   return
-                                                   break
-                                                   (lambda (continue-state)
-                                                     (M-state-while statement
-                                                                    continue-state
-                                                                    return
-                                                                    break
-                                                                    continue
-                                                                    throw
-                                                                    normal))
-                                                   throw
-                                                   (lambda (normal-state)
-                                                     (M-state-while statement
-                                                                    normal-state
-                                                                    return
-                                                                    break
-                                                                    continue
-                                                                    throw
-                                                                    normal)))
+                                                    state
+                                                    return
+                                                    break
+                                                    (lambda (continue-state)
+                                                      (M-state-while statement
+                                                                     continue-state
+                                                                     return
+                                                                     break
+                                                                     continue
+                                                                     throw
+                                                                     normal))
+                                                    throw
+                                                    (lambda (normal-state)
+                                                      (M-state-while statement
+                                                                     normal-state
+                                                                     return
+                                                                     break
+                                                                     continue
+                                                                     throw
+                                                                     normal)))
                                  (normal state))))))
 
 ; Statement abstractions
