@@ -318,99 +318,45 @@
   (lambda (expression state value-cont)
     (cond
       ((null? expression) (error "Null parameter passed to M-quantity-expression"))
-      ((logical-calculation? expression) (M-quantity-conditional expression state value-cont))
-      (else (M-quantity-term expression state value-cont)))))
+      ((C-boolean? expression) (value-cont expression))
+      ((number? expression) (value-cont expression))
+      ((atom? expression) (value-cont (S-lookup expression state)))
+      ((negation? expression) (M-quantity-expression (unaryoperand expression) state (lambda (v) (value-cont (* -1 v)))))
+      ((eq? (operator expression) '!) (M-quantity-expression (unaryoperand expression) state (lambda (v) (value-cont (C-not v)))))
+      (else (M-quantity-operation expression state value-cont)))))
 
 
-;;;; CONDITIONAL
+;;;; OPERATIONS
 ;; -----------------------------------------------------------------------
-;; Conditionals return 'true or 'false and connect one or more COMPARISONs
+;; Operations combine the results of two like-typed EXPRESSIONs
 
-(define M-quantity-conditional
-  (lambda (conditional state value-cont)
-    (cond
-      
-      ((null? conditional) (error "Null parameter passed to M-quantity-conditional"))
-      ((eq? '&& (connective conditional)) (M-quantity-expression (leftoperand conditional)
-                                                                 state
-                                                                 (lambda (v1)
-                                                                   (M-quantity-expression (rightoperand conditional)
-                                                                                          state
-                                                                                          (lambda (v2)
-                                                                                            (value-cont (C-and v1 v2)))))))
-      ((eq? '|| (connective conditional)) (M-quantity-expression (leftoperand conditional)
-                                                                 state
-                                                                 (lambda (v1)
-                                                                   (M-quantity-expression (rightoperand conditional)
-                                                                                          state
-                                                                                          (lambda (v2)
-                                                                                            (value-cont (C-or v1 v2)))))))
-      ((eq? '! (connective conditional)) (M-quantity-expression (leftoperand conditional)
-                                                                state
-                                                                (lambda (v)
-                                                                  (value-cont (C-not v)))))
-      (else (M-quantity-comparison conditional state value-cont)))))
+(define M-quantity-operation
+  (lambda (operation state value-cont)
+    (if (null? operation)
+        (error "Null parameter passed to M-quantity-operation")
+        (M-quantity-expression (leftoperand operation)
+                               state
+                               (lambda (v1)
+                                 (M-quantity-expression (rightoperand operation)
+                                                        state
+                                                        (lambda (v2)
+                                                          (cond
+                                                            ((eq? '< (operator operation)) (value-cont (C-< v1 v2)))
+                                                            ((eq? '> (operator operation)) (value-cont (C-> v1 v2)))
+                                                            ((eq? '== (operator operation)) (value-cont (C-== v1 v2)))
+                                                            ((eq? '<= (operator operation)) (value-cont (C-<= v1 v2)))
+                                                            ((eq? '>= (operator operation)) (value-cont (C->= v1 v2)))
+                                                            ((eq? '!= (operator operation)) (value-cont (C-!= v1 v2)))
+                                                            ((eq? '&& (operator operation)) (value-cont (C-and v1 v2)))
+                                                            ((eq? '|| (operator operation)) (value-cont (C-or v1 v2)))
+                                                            ((eq? '+ (operator operation)) (value-cont (+ v1 v2)))
+                                                            ((eq? '- (operator operation)) (value-cont (- v1 v2)))
+                                                            ((eq? '* (operator operation)) (value-cont (* v1 v2)))
+                                                            ((eq? '/ (operator operation)) (value-cont (quotient v1 v2)))
+                                                            ((eq? '% (operator operation)) (value-cont (remainder v1 v2)))
+                                                            (else (error "The operator is unknown:" (operator operation)))))))))))
 
-
-;;;; COMPARISON
-;; -----------------------------------------------------------------------
-;; Comparisons return 'true or 'false and compare TERMs
-
-(define M-quantity-comparison
-  (lambda (comparison state value-cont)
-    (if (null? comparison)
-        (error "Null parameter passed to M-quantity-comparison")
-        (M-quantity-term (leftoperand comparison)
-                         state
-                         (lambda (v1)
-                           (M-quantity-term (rightoperand comparison)
-                                            state
-                                            (lambda (v2)
-                                              (cond
-                                                ((eq? '< (comparator comparison)) (value-cont (C-< v1 v2)))
-                                                ((eq? '> (comparator comparison)) (value-cont (C-> v1 v2)))
-                                                ((eq? '== (comparator comparison)) (value-cont (C-== v1 v2)))
-                                                ((eq? '<= (comparator comparison)) (value-cont (C-<= v1 v2)))
-                                                ((eq? '>= (comparator comparison)) (value-cont (C->= v1 v2)))
-                                                ((eq? '!= (comparator comparison)) (value-cont (C-!= v1 v2)))
-                                                (else (error "The operator is unknown:" (comparator comparison)))))))))))
-
-
-;;;; Terms
-;; -----------------------------------------------------------------------
-;; Terms are integer calulations and boolean values
-    
-; Calculate the value of a mathematical expression
-(define M-quantity-term
-  (lambda (term state value-cont)
-    (cond
-      ((null? term) (error "Null parameter passed to M-quantity-term"))
-      ((C-boolean? term) (value-cont term))
-      ((number? term) (value-cont term))
-      ((S-unassigned? term state)
-       (error "Variable referenced before assignment:" term))
-      ((atom? term) (value-cont (S-lookup term state)))
-      ((negation? term) (M-quantity-term (unaryoperand term)
-                                         state
-                                         (lambda (v)
-                                           (value-cont (* -1 v)))))
-      (else (M-quantity-term (leftoperand term)
-                             state
-                             (lambda (v1)
-                               (M-quantity-term (rightoperand term)
-                                                state
-                                                (lambda (v2)
-                                                  (cond
-                                                    ((eq? '+ (operator term)) (value-cont (+ v1 v2)))
-                                                    ((eq? '- (operator term)) (value-cont (- v1 v2)))
-                                                    ((eq? '* (operator term)) (value-cont (* v1 v2)))
-                                                    ((eq? '/ (operator term)) (value-cont (quotient v1 v2)))
-                                                    ((eq? '% (operator term)) (value-cont (remainder v1 v2)))
-                                                    (else (error "The operator is unknown:" (operator term))))))))))))
-
-; Conditional, comparison, and term abstractions
-(define comparator car)
-(define connective car)
+; Expression abstractions
 (define operator car)
 (define unaryoperand cadr)
 (define leftoperand cadr)
@@ -460,14 +406,6 @@
   (lambda (loperand roperand)
     (C-true? (not (= loperand roperand)))))
 
-; Check if an operator is a logical operator
-(define logical-calculation?
-  (lambda (expression)
-    (if (pair? expression)
-        (in? (operator expression)
-             '(&& || ! < > == <= >= !=))
-        #f)))
-
 
 ;;;; State functions
 ;; -----------------------------------------------------------------------
@@ -487,6 +425,7 @@
     (cond 
       ((null? state) (error "Variable referenced before declaration:" variable))
       ((S-layer-null? (first-layer state)) (S-lookup variable (remaining-layers state)))
+      ((and (eq? variable (first-var state)) (eq? 'null (first-val state))) (error "Variable referenced before assignment:" variable))
       ((eq? variable (first-var state)) (first-val state))
       (else (S-lookup variable (remaining-bindings state))))))
 
@@ -525,18 +464,12 @@
       ((eq? variable (first-var state)) (remaining-bindings state))
       (else (S-add (first-var state) (first-val state) (S-remove variable (remaining-bindings state)))))))
 
-; Check if a variable has been declared but not assigned a value
-(define S-unassigned?
-  (lambda (term state)
-    (and (S-name? term state)
-         (eq? 'null (S-lookup term state)))))
-
-; Check if the a layer is empty
+; Check if the top layer is empty
 (define S-layer-null?
   (lambda (layer)
     (null? (car layer))))
 
-; Add a layer onto the state
+; Add a given layer onto the state
 (define S-push-layer
   (lambda (layer state)
     (cons layer state)))
