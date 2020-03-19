@@ -168,14 +168,14 @@
                                                              throw
                                                              (lambda (normal-state) (continue normal-state))))
                    (lambda (throw-state thrown-value) (M-state-catch (catch-statement statement)
-                                                                     throw-state
+                                                                     (S-pop-layer throw-state)
                                                                      thrown-value
                                                                      return 
                                                                      (lambda (break-state) (break (S-pop-layer break-state))) 
                                                                      (lambda (continue-state) (continue (S-pop-layer continue-state))) 
                                                                      (lambda (throw-state2 thrown-value2) (throw (S-pop-layer throw-state2) thrown-value2)) 
                                                                      (lambda (normal-state) (M-state-finally (finally-statement statement)
-                                                                                                             (S-pop-layer normal-state)
+                                                                                                             normal-state
                                                                                                              return
                                                                                                              break
                                                                                                              continue
