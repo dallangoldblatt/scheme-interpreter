@@ -1,1 +1,7 @@
-return true || true;
+var x = 0;
+try {
+  return x;
+}
+catch (e) {
+  return e;
+}
