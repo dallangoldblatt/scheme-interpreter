@@ -1,11 +1,10 @@
-; If you are using scheme instead of racket, comment these two lines, uncomment the (load "simpleParser.scm") and comment the (require "simpleParser.rkt")
 #lang racket
 
 ; (require "functionParser.rkt")
 (require "deprecated/simpleParser.rkt")
 (provide (all-defined-out))
 
-; An interpreter for the simple language using tail recursion for the M_state functions and does not handle side effects.
+; An interpreter for the simple language using tail recursion for the M_state functions
 
 ; The functions that start interpret-...  all return the current environment.  These are the M_state functions.
 ; The functions that start eval-...  all return a value.  These are the M_value and M_boolean functions.
@@ -14,9 +13,118 @@
 (define interpret
   (lambda (file)
     (scheme->language
+     ; TODO change entrypoint to be into the global handling layer
      (interpret-statement-list (parser file) (newenvironment) (lambda (v) v)
                                (lambda (env) (error "Break used outside of loop")) (lambda (env) (error "Continue used outside of loop"))
                                (lambda (v env) (error "Uncaught exception thrown:" v)) (lambda (env) env)))))
+
+; ------------------------------------------
+; GLOBAL VARIABLE AND FUNCTION DEFINITION LAYER 
+; ------------------------------------------
+
+; TODO
+; create an empty environment
+; handle the assignments and function declarations at the global level
+; call main with the constructed environment
+
+
+; formats: 
+; function: (function name (params) ((body)
+; closure:  (name (params) ((body)) (state-function)
+
+
+;--------------------------------------
+; FUNCTION DEFINITION AND EXECUTION HANDLING
+;--------------------------------------
+
+; Creates the closure for a newly defined function
+(define create-function-closure
+  (lambda (function environment)
+    (list (function-name function)
+          (function-params function)
+          (function-body function)
+          (create-environment-builder function environment))))
+
+; Creates a the environment-building function for the closure
+(define create-environment-builder
+  (lambda (function function-def-environment)
+    (lambda (environment)
+      (add-functions-to-environment ; Adds the closures of any nested functions to the built environment
+       (push-frame (pop-n-frames (- (length environment) (length function-def-environment)) environment))
+       (find-nested-function-definitions (function-body function) (push-frame environment) '()))))) 
+
+; Add a list of function closures to the top frame of the state
+(define add-functions-to-environment
+  (lambda (function-list environment)
+    (if (null? function-list)
+        environment
+        (add-functions-to-environment
+         (remaining-functions function-list)
+         (insert (closure-name (first-function function-list)) (first-function function-list))))))
+
+; Read a function body and recursively create their closures
+; Add these definions to the parent function's closure
+(define find-nested-function-definitions
+  (lambda (body local-environment function-list)
+    (cond
+      ((null? body) function-list)
+      ((eq? 'function (statement-type (first-statement body)))
+       (find-nested-function-definitions (remaining-statements body)
+                                         local-environment
+                                         (cons (create-function-closure (first-statement body) local-environment) function-list)))
+      (else find-nested-function-definitions (remaining-statements body) local-environment function-list))))
+
+; Helper function for popping n frames off of the given environment
+(define pop-n-frames
+  (lambda (n environment)
+    (if (<= n 0)
+        environment
+        (pop-n-frames (- n 1) (cdr environment)))))
+
+; Execute a function from its closure
+(define interpret-function
+  (lambda (closure actual-params environment return break continue throw next)
+    (interpret-statement-list (closure-body closure)
+                              (add-parameters
+                               actual-params
+                               (closure-formal-params closure)
+                               environment
+                               ((closure-environment-builder closure) environment))
+                              return
+                              break
+                              continue  ; TODO change these continuations appropriately
+                              throw
+                              next)))
+
+; Evaluate the actual parameters to a function call and add them to the environment
+(define add-parameters
+  (lambda (actual-params formal-params call-environment function-environment)
+    (cond
+      ((and (null? actual-params) (null? formal-params)) function-environment)
+      ((or (null? actual-params) (null? formal-params)) (error "The actual parameters do not match the formal parameters:" formal-params))
+      (else (add-parameters (remaining-params actual-params)
+                            (remaining-params formal-params)
+                            call-environment
+                            (insert (first-param formal-params) (eval-expression (first-param actual-params) call-environment)))))))
+                               
+; Function closure abstractions
+(define function-name cadr)
+(define function-params caddr)
+(define function-body cadddr)
+(define closure-name car)
+(define closure-formal-params cadr)
+(define closure-body caddr)
+(define closure-environment-builder cadddr)
+(define first-statement car)
+(define remaining-statements cdr)
+(define first-function car)
+(define remaining-functions cdr)
+(define first-param car)
+(define remaining-params cdr)
+
+; ------------------------
+; STATEMENT EXECUTION FUNCTIONS
+; ------------------------
 
 ; interprets a list of statements.  The state/environment from each statement is used for the next ones.
 (define interpret-statement-list
