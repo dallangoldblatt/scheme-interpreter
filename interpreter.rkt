@@ -1,7 +1,9 @@
 ; If you are using scheme instead of racket, comment these two lines, uncomment the (load "simpleParser.scm") and comment the (require "simpleParser.rkt")
 #lang racket
-(require "simpleParser.rkt")
-; (load "simpleParser.scm")
+
+; (require "functionParser.rkt")
+(require "deprecated/simpleParser.rkt")
+(provide (all-defined-out))
 
 ; An interpreter for the simple language using tail recursion for the M_state functions and does not handle side effects.
 
@@ -13,8 +15,8 @@
   (lambda (file)
     (scheme->language
      (interpret-statement-list (parser file) (newenvironment) (lambda (v) v)
-                               (lambda (env) (myerror "Break used outside of loop")) (lambda (env) (myerror "Continue used outside of loop"))
-                               (lambda (v env) (myerror "Uncaught exception thrown")) (lambda (env) env)))))
+                               (lambda (env) (error "Break used outside of loop")) (lambda (env) (error "Continue used outside of loop"))
+                               (lambda (v env) (error "Uncaught exception thrown:" v)) (lambda (env) env)))))
 
 ; interprets a list of statements.  The state/environment from each statement is used for the next ones.
 (define interpret-statement-list
@@ -37,7 +39,7 @@
       ((eq? 'begin (statement-type statement)) (interpret-block statement environment return break continue throw next))
       ((eq? 'throw (statement-type statement)) (interpret-throw statement environment throw))
       ((eq? 'try (statement-type statement)) (interpret-try statement environment return break continue throw next))
-      (else (myerror "Unknown statement:" (statement-type statement))))))
+      (else (error "Unknown statement:" (statement-type statement))))))
 
 ; Calls the return continuation with the given expression value
 (define interpret-return
@@ -97,7 +99,7 @@
   (lambda (catch-statement environment return break continue throw next finally-block)
     (cond
       ((null? catch-statement) (lambda (ex env) (interpret-block finally-block env return break continue throw (lambda (env2) (throw ex env2))))) 
-      ((not (eq? 'catch (statement-type catch-statement))) (myerror "Incorrect catch statement"))
+      ((not (eq? 'catch (statement-type catch-statement))) (error "Incorrect catch statement"))
       (else (lambda (ex env)
                   (interpret-statement-list 
                        (get-body catch-statement) 
@@ -129,7 +131,7 @@
   (lambda (finally-statement)
     (cond
       ((null? finally-statement) '(begin))
-      ((not (eq? (statement-type finally-statement) 'finally)) (myerror "Incorrectly formatted finally block"))
+      ((not (eq? (statement-type finally-statement) 'finally)) (error "Incorrectly formatted finally block"))
       (else (cons 'begin (cadr finally-statement))))))
 
 ; Evaluates all possible boolean and arithmetic expressions, including constants and variables.
@@ -169,7 +171,7 @@
       ((eq? '>= (operator expr)) (>= op1value (eval-expression (operand2 expr) environment)))
       ((eq? '|| (operator expr)) (or op1value (eval-expression (operand2 expr) environment)))
       ((eq? '&& (operator expr)) (and op1value (eval-expression (operand2 expr) environment)))
-      (else (myerror "Unknown operator:" (operator expr))))))
+      (else (error "Unknown operator:" (operator expr))))))
 
 ; Determines if two values are equal.  We need a special test because there are both boolean and integer types.
 (define isequal
@@ -273,14 +275,14 @@
   (lambda (var environment)
     (let ((value (lookup-in-env var environment)))
       (if (eq? 'novalue value)
-          (myerror "error: variable without an assigned value:" var)
+          (error "Variable referenced before assignment:" var)
           value))))
 
 ; Return the value bound to a variable in the environment
 (define lookup-in-env
   (lambda (var environment)
     (cond
-      ((null? environment) (myerror "error: undefined variable" var))
+      ((null? environment) (error "Variable referenced before declaration:" var))
       ((exists-in-list? var (variables (topframe environment))) (lookup-in-frame var (topframe environment)))
       (else (lookup-in-env var (cdr environment))))))
 
@@ -288,7 +290,7 @@
 (define lookup-in-frame
   (lambda (var frame)
     (cond
-      ((not (exists-in-list? var (variables frame))) (myerror "error: undefined variable" var))
+      ((not (exists-in-list? var (variables frame))) (error "Variable referenced before declaration:" var))
       (else (language->scheme (get-value (indexof var (variables frame)) (store frame)))))))
 
 ; Get the location of a name in a list of names
@@ -310,7 +312,7 @@
 (define insert
   (lambda (var val environment)
     (if (exists-in-list? var (variables (car environment)))
-        (myerror "error: variable is being re-declared:" var)
+        (error "Variable already declared:" var)
         (cons (add-to-frame var val (car environment)) (cdr environment)))))
 
 ; Changes the binding of a variable to a new value in the environment.  Gives an error if the variable does not exist.
@@ -318,7 +320,7 @@
   (lambda (var val environment)
     (if (exists? var environment)
         (update-existing var val environment)
-        (myerror "error: variable used but not defined:" var))))
+        (error "Variable assigned before declaration:" var))))
 
 ; Add a new variable/value pair to the frame.
 (define add-to-frame
@@ -370,16 +372,3 @@
       ((eq? v #f) 'false)
       ((eq? v #t) 'true)
       (else v))))
-
-; Because the error function is not defined in R5RS scheme, I create my own:
-(define error-break (lambda (v) v))
-(call-with-current-continuation (lambda (k) (set! error-break k)))
-
-(define myerror
-  (lambda (str . vals)
-    (letrec ((makestr (lambda (str vals)
-                        (if (null? vals)
-                            str
-                            (makestr (string-append str (string-append " " (symbol->string (car vals)))) (cdr vals))))))
-      (error-break (display (string-append str (makestr "" vals)))))))
-

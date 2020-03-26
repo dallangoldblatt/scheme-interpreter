@@ -1,7 +1,9 @@
 var x = 0;
 try {
-  return x;
+  var a = 0;
+  throw x;
 }
 catch (e) {
+  var y = a + 1;
   return e;
 }
