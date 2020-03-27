@@ -83,7 +83,7 @@
 
 ; Execute a function from its closure
 (define interpret-function
-  (lambda (closure actual-params environment return break continue throw next)
+  (lambda (closure actual-params environment return throw)
     (interpret-statement-list (closure-body closure)
                               (add-parameters
                                actual-params
@@ -91,10 +91,14 @@
                                environment
                                ((closure-environment-builder closure) environment))
                               return
-                              break
-                              continue  ; TODO change these continuations appropriately
+                              (lambda (env) (error "Break used outside of loop"))
+                              (lambda (env) (error "Continue used outside of loop"))
                               throw
-                              next)))
+                              identity)))
+
+; Evaluate a function
+; TODO eval-function
+    
 
 ; Evaluate the actual parameters to a function call and add them to the environment
 (define add-parameters
