@@ -23,9 +23,10 @@
 ; ------------------------------------------
 
 ; TODO
-; create an empty environment
-; handle the assignments and function declarations at the global level
-; call main with the constructed environment
+; For the global layer there needs to be an initial pass that does the following:
+;    create an empty environment
+;    handle the assignments and function declarations sequentially
+;    call main with the constructed environment
 
 
 ; formats: 
@@ -81,8 +82,8 @@
         environment
         (pop-n-frames (- n 1) (cdr environment)))))
 
-; Execute a function from its closure
-(define interpret-function
+; Create the correct environment from the closue, bind the parameters, call the body
+(define call-function
   (lambda (closure actual-params environment return throw)
     (interpret-statement-list (closure-body closure)
                               (add-parameters
@@ -96,10 +97,6 @@
                               (lambda (env) (error "Continue used outside of loop"))
                               throw
                               identity)))
-
-; Evaluate a function
-; TODO eval-function
-    
 
 ; Evaluate the actual parameters to a function call and add them to the environment
 (define add-parameters
@@ -143,6 +140,8 @@
 (define interpret-statement
   (lambda (statement environment return break continue throw next)
     (cond
+      ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled by creating global closures
+      ((eq? 'funcall (statement-type statement)) (interpret-function statement environment next throw))
       ((eq? 'return (statement-type statement)) (interpret-return statement environment return))
       ((eq? 'var (statement-type statement)) (interpret-declare statement environment next))
       ((eq? '= (statement-type statement)) (interpret-assign statement environment next))
@@ -155,6 +154,16 @@
       ((eq? 'try (statement-type statement)) (interpret-try statement environment return break continue throw next))
       (else (error "Unknown statement:" (statement-type statement))))))
 
+; Calls a function and ignores the return value (since this function is being called outside of an assignment)
+(define interpret-function
+  (lambda (statement environment next throw)
+    (call-function (lookup (get-function-call-name statement) environment)
+                   (get-function-actual-params statement)
+                   environment
+                   (lambda (return-val) (next environment))
+                   throw))) ; TODO verify passing throw is correct
+        
+    
 ; Calls the return continuation with the given expression value
 (define interpret-return
   (lambda (statement environment return)
@@ -248,15 +257,27 @@
       ((not (eq? (statement-type finally-statement) 'finally)) (error "Incorrectly formatted finally block"))
       (else (cons 'begin (cadr finally-statement))))))
 
+; *** TODO *** all the eval functions need to be converted to CPS so that they can have next and throw continuations
+
 ; Evaluates all possible boolean and arithmetic expressions, including constants and variables.
 (define eval-expression
-  (lambda (expr environment)
+  (lambda (expr environment value-cont throw) ; TODO this needs to have a throw continuation since expressions can now contain function calls
     (cond
-      ((number? expr) expr)
-      ((eq? expr 'true) #t)
-      ((eq? expr 'false) #f)
-      ((not (list? expr)) (lookup expr environment))
-      (else (eval-operator expr environment)))))
+      ((function-call? expr) (eval-function expr environment value-cont throw))
+      ((number? expr) (value-cont expr))
+      ((eq? expr 'true) (value-cont #t))
+      ((eq? expr 'false) (value-cont #f))
+      ((not (list? expr)) (value-cont (lookup expr environment)))
+      (else (eval-operator expr environment))))) ; TODO convert the other eval- to CPS
+
+; Get the value returned by a function call
+(define eval-function
+  (lambda (statement environment value-cont throw)
+    (call-function (lookup (get-function-call-name statement) environment)
+                   (get-function-actual-params statement)
+                   environment
+                   (lambda (return-val) (value-cont return-val))
+                   throw))) ; TODO verify passing throw is correct
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order in case you choose
@@ -294,7 +315,6 @@
         (= val1 val2)
         (eq? val1 val2))))
 
-
 ;-----------------
 ; HELPER FUNCTIONS
 ;-----------------
@@ -313,6 +333,10 @@
   (lambda (statement)
     (not (null? (cdddr statement)))))
 
+(define function-call?
+  (lambda (expr)
+    (eq? (operator expr) 'funcall)))
+
 ; these helper functions define the parts of the various statement types
 (define statement-type operator)
 (define get-expr operand1)
@@ -329,6 +353,8 @@
 (define get-try operand1)
 (define get-catch operand2)
 (define get-finally operand3)
+(define get-function-call-name cadr)
+(define get-function-actual-params caddr)
 
 (define catch-var
   (lambda (catch-statement)
