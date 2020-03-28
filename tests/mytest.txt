@@ -1,9 +1,0 @@
-var x = 0;
-try {
-  var a = 0;
-  throw x;
-}
-catch (e) {
-  var y = a + 1;
-  return e;
-}

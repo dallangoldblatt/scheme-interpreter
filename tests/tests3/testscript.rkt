@@ -1,0 +1,27 @@
+#lang racket
+
+(require test-engine/racket-tests)
+(require "../../interpreter.rkt")
+
+(check-expect (interpret "test1.txt") 10)
+(check-expect (interpret "test2.txt") 14)
+(check-expect (interpret "test3.txt") 45)
+(check-expect (interpret "test4.txt") 55)
+(check-expect (interpret "test5.txt") 1)
+(check-expect (interpret "test6.txt") 115)
+(check-expect (interpret "test7.txt") 'true)
+(check-expect (interpret "test8.txt") 20)
+(check-expect (interpret "test9.txt") 24)
+(check-expect (interpret "test10.txt") 2)
+(check-expect (interpret "test11.txt") 35)
+(check-error (interpret "test12.txt") "The actual parameters do not match the formal parameters for: f")
+(check-expect (interpret "test13.txt") 90)
+(check-expect (interpret "test14.txt") 69)
+(check-expect (interpret "test15.txt") 87)
+(check-expect (interpret "test16.txt") 64)
+(check-error (interpret "test17.txt") "Variable referenced before declaration: b")
+(check-expect (interpret "test18.txt") 125)
+(check-expect (interpret "test19.txt") 100)
+(check-expect (interpret "test20.txt") 2000400)
+
+(test)

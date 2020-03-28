@@ -1,7 +1,7 @@
 #lang racket
 
-; (require "functionParser.rkt")
-(require "deprecated/simpleParser.rkt")
+(require "functionParser.rkt")
+; (require "deprecated/simpleParser.rkt")
 (provide (all-defined-out))
 
 ; An interpreter for the simple language using tail recursion for the M_state functions
@@ -86,6 +86,7 @@
   (lambda (closure actual-params environment return throw)
     (interpret-statement-list (closure-body closure)
                               (add-parameters
+                               (closure-name closure)
                                actual-params
                                (closure-formal-params closure)
                                environment
@@ -102,11 +103,12 @@
 
 ; Evaluate the actual parameters to a function call and add them to the environment
 (define add-parameters
-  (lambda (actual-params formal-params call-environment function-environment)
+  (lambda (function-name actual-params formal-params call-environment function-environment)
     (cond
       ((and (null? actual-params) (null? formal-params)) function-environment)
-      ((or (null? actual-params) (null? formal-params)) (error "The actual parameters do not match the formal parameters:" formal-params))
-      (else (add-parameters (remaining-params actual-params)
+      ((or (null? actual-params) (null? formal-params)) (error "The actual parameters do not match the formal parameters for:" function-name))
+      (else (add-parameters function-name
+                            (remaining-params actual-params)
                             (remaining-params formal-params)
                             call-environment
                             (insert (first-param formal-params) (eval-expression (first-param actual-params) call-environment)))))))
@@ -191,12 +193,12 @@
 (define interpret-block
   (lambda (statement environment return break continue throw next)
     (interpret-statement-list (cdr statement)
-                                         (push-frame environment)
-                                         return
-                                         (lambda (env) (break (pop-frame env)))
-                                         (lambda (env) (continue (pop-frame env)))
-                                         (lambda (v env) (throw v (pop-frame env)))
-                                         (lambda (env) (next (pop-frame env))))))
+                              (push-frame environment)
+                              return
+                              (lambda (env) (break (pop-frame env)))
+                              (lambda (env) (continue (pop-frame env)))
+                              (lambda (v env) (throw v (pop-frame env)))
+                              (lambda (env) (next (pop-frame env))))))
 
 ; We use a continuation to throw the proper value.  Because we are not using boxes, the environment/state must be thrown as well so any environment changes will be kept
 (define interpret-throw
@@ -213,14 +215,14 @@
       ((null? catch-statement) (lambda (ex env) (interpret-block finally-block env return break continue throw (lambda (env2) (throw ex env2))))) 
       ((not (eq? 'catch (statement-type catch-statement))) (error "Incorrect catch statement"))
       (else (lambda (ex env)
-                  (interpret-statement-list 
-                       (get-body catch-statement) 
-                       (insert (catch-var catch-statement) ex (push-frame env))
-                       return 
-                       (lambda (env2) (break (pop-frame env2))) 
-                       (lambda (env2) (continue (pop-frame env2))) 
-                       (lambda (v env2) (throw v (pop-frame env2))) 
-                       (lambda (env2) (interpret-block finally-block (pop-frame env2) return break continue throw next))))))))
+              (interpret-statement-list 
+               (get-body catch-statement) 
+               (insert (catch-var catch-statement) ex (push-frame env))
+               return 
+               (lambda (env2) (break (pop-frame env2))) 
+               (lambda (env2) (continue (pop-frame env2))) 
+               (lambda (v env2) (throw v (pop-frame env2))) 
+               (lambda (env2) (interpret-block finally-block (pop-frame env2) return break continue throw next))))))))
 
 ; To interpret a try block, we must adjust  the return, break, continue continuations to interpret the finally block if any of them are used.
 ;  We must create a new throw continuation and then interpret the try block with the new continuations followed by the finally block with the old continuations
