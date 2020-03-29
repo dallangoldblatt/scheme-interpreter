@@ -14,9 +14,7 @@
   (lambda (file)
     (scheme->language
      ; TODO change entrypoint to be into the global handling layer
-     (interpret-statement-list (parser file) (newenvironment) (lambda (v) v)
-                               (lambda (env) (error "Break used outside of loop")) (lambda (env) (error "Continue used outside of loop"))
-                               (lambda (v env) (error "Uncaught exception thrown:" v)) (lambda (env) env)))))
+     (compile (parser file) (newenvironment)))))
 
 ; ------------------------------------------
 ; GLOBAL VARIABLE AND FUNCTION DEFINITION LAYER 
@@ -32,6 +30,20 @@
 ; formats: 
 ; function: (function name (params) ((body)
 ; closure:  (name (params) ((body)) (state-function)
+
+; Compiles (adds to state) global variables and function declarations, and returns the state
+(define compile
+  (lambda (statement-list environment)
+    (if (null? statement-list)
+        (interpret-function '(funcall main ()) environment identity (lambda (v env) (error "Uncaught exception thrown:" v)))
+        (compile-statement (car statement-list) environment (lambda (env) (compile (cdr statement-list) env))))))
+
+(define compile-statement
+  (lambda (statement environment next)
+    (cond
+      ((eq? 'function (statement-type statement)) (next (insert (function-name statement) (create-function-closure statement environment) environment)))
+      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next))
+      (else                                       (error "Unknown statement:" (statement-type statement))))))
 
 
 ;--------------------------------------
@@ -61,7 +73,7 @@
         environment
         (add-functions-to-environment
          (remaining-functions function-list)
-         (insert (closure-name (first-function function-list)) (first-function function-list))))))
+         (insert (closure-name (first-function function-list)) (first-function function-list) environment)))))
 
 ; Read a function body and recursively create their closures
 ; Add these definions to the parent function's closure
@@ -82,7 +94,7 @@
         environment
         (pop-n-frames (- n 1) (cdr environment)))))
 
-; Create the correct environment from the closue, bind the parameters, call the body
+; Create the correct environment from the closure, bind the parameters, call the body
 (define call-function
   (lambda (closure actual-params environment return throw)
     (interpret-statement-list (closure-body closure)
@@ -141,18 +153,18 @@
   (lambda (statement environment return break continue throw next)
     (cond
       ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled by creating global closures
-      ((eq? 'funcall (statement-type statement)) (interpret-function statement environment next throw))
-      ((eq? 'return (statement-type statement)) (interpret-return statement environment return))
-      ((eq? 'var (statement-type statement)) (interpret-declare statement environment next))
-      ((eq? '= (statement-type statement)) (interpret-assign statement environment next))
-      ((eq? 'if (statement-type statement)) (interpret-if statement environment return break continue throw next))
-      ((eq? 'while (statement-type statement)) (interpret-while statement environment return throw next))
+      ((eq? 'funcall (statement-type statement))  (interpret-function statement environment next throw))
+      ((eq? 'return (statement-type statement))   (interpret-return statement environment return))
+      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next))
+      ((eq? '= (statement-type statement))        (interpret-assign statement environment next))
+      ((eq? 'if (statement-type statement))       (interpret-if statement environment return break continue throw next))
+      ((eq? 'while (statement-type statement))    (interpret-while statement environment return throw next))
       ((eq? 'continue (statement-type statement)) (continue environment))
-      ((eq? 'break (statement-type statement)) (break environment))
-      ((eq? 'begin (statement-type statement)) (interpret-block statement environment return break continue throw next))
-      ((eq? 'throw (statement-type statement)) (interpret-throw statement environment throw))
-      ((eq? 'try (statement-type statement)) (interpret-try statement environment return break continue throw next))
-      (else (error "Unknown statement:" (statement-type statement))))))
+      ((eq? 'break (statement-type statement))    (break environment))
+      ((eq? 'begin (statement-type statement))    (interpret-block statement environment return break continue throw next))
+      ((eq? 'throw (statement-type statement))    (interpret-throw statement environment throw))
+      ((eq? 'try (statement-type statement))      (interpret-try statement environment return break continue throw next))
+      (else                                       (error "Unknown statement:" (statement-type statement))))))
 
 ; Calls a function and ignores the return value (since this function is being called outside of an assignment)
 (define interpret-function
@@ -261,7 +273,7 @@
 
 ; Evaluates all possible boolean and arithmetic expressions, including constants and variables.
 (define eval-expression
-  (lambda (expr environment value-cont throw) ; TODO this needs to have a throw continuation since expressions can now contain function calls
+  (lambda (expr environment value-cont throw)
     (cond
       ((function-call? expr) (eval-function expr environment value-cont throw))
       ((number? expr) (value-cont expr))
