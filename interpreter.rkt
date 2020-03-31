@@ -19,13 +19,6 @@
 ; GLOBAL VARIABLE AND FUNCTION DEFINITION LAYER 
 ; ------------------------------------------
 
-; TODO
-; For the global layer there needs to be an initial pass that does the following:
-;    create an empty environment
-;    handle the assignments and function declarations sequentially
-;    call main with the constructed environment
-
-
 ; formats: 
 ; function: (function name (params) ((body)
 ; closure:  (name (params) ((body)) (state-function)
@@ -82,12 +75,12 @@
 (define find-nested-function-definitions
   (lambda (body local-environment function-list)
     (cond
-      ((null? body) function-list)
-      ((eq? 'function (statement-type (first-statement body)))
-       (find-nested-function-definitions (remaining-statements body)
-                                         local-environment
-                                         (cons (create-function-closure (first-statement body) local-environment) function-list)))
-      (else find-nested-function-definitions (remaining-statements body) local-environment function-list))))
+      ((null? body)                                            function-list)
+      ((eq? 'function (statement-type (first-statement body))) (find-nested-function-definitions
+                                                                (remaining-statements body)
+                                                                local-environment
+                                                                (cons (create-function-closure (first-statement body) local-environment) function-list)))
+      (else                                                    (find-nested-function-definitions (remaining-statements body) local-environment function-list)))))
 
 ; Helper function for popping n frames off of the given environment
 (define pop-n-frames
