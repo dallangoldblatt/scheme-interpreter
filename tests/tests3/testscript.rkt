@@ -19,9 +19,10 @@
 (check-expect (interpret "test14.txt") 69)
 (check-expect (interpret "test15.txt") 87)
 (check-expect (interpret "test16.txt") 64)
-(check-error (interpret "test17.txt") "Variable referenced before declaration: b")
+(check-error (interpret "test17.txt") "Variable assigned before declaration: b")
 (check-expect (interpret "test18.txt") 125)
 (check-expect (interpret "test19.txt") 100)
 (check-expect (interpret "test20.txt") 2000400)
+(check-error (interpret "test21.txt" "Variable referenced before declaration: z"))
 
 (test)

@@ -12,7 +12,6 @@
 (define interpret
   (lambda (file)
     (scheme->language
-     ; TODO change entrypoint to be into the global handling layer
      (compile (parser file) (newenvironment)))))
 
 ; ------------------------------------------
@@ -23,7 +22,8 @@
 ; function: (function name (params) ((body)
 ; closure:  (name (params) ((body)) (state-function)
 
-; Compiles (adds to state) global variables and function declarations; then calls main()
+; Compiles (adds to environment) global variables and function declarations.
+; Once all statements have been handled, call main() 
 (define compile
   (lambda (statement-list environment)
     (if (null? statement-list)
@@ -37,7 +37,7 @@
   (lambda (statement environment next)
     (cond
       ((eq? 'function (statement-type statement)) (next (insert (function-name statement) (create-function-closure statement environment) environment)))
-      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next (lambda (v env) (error "Uncaught exception thrown:" v))))
+      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next (lambda (v) (error "Uncaught exception thrown:" v))))
       (else                                       (error "Unknown statement:" (statement-type statement))))))
 
 
@@ -138,18 +138,24 @@
 ; STATEMENT EXECUTION FUNCTIONS
 ; ------------------------
 
-; interprets a list of statements.  The state/environment from each statement is used for the next ones.
+; interprets a list of statements. The state/environment from each statement is used for the next ones.
 (define interpret-statement-list
   (lambda (statement-list environment return break continue throw next)
     (if (null? statement-list)
         (next environment)
-        (interpret-statement (car statement-list) environment return break continue throw (lambda (env) (interpret-statement-list (cdr statement-list) env return break continue throw next))))))
+        (interpret-statement (car statement-list)
+                             environment
+                             return
+                             break
+                             continue
+                             throw
+                             (lambda (env) (interpret-statement-list (cdr statement-list) env return break continue throw next))))))
 
 ; interpret a statement in the environment with continuations for return, break, continue, throw, and "next statement"
 (define interpret-statement
   (lambda (statement environment return break continue throw next)
     (cond
-      ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled by creating global closures
+      ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled in global compile
       ((eq? 'funcall (statement-type statement))  (interpret-function statement environment next throw))
       ((eq? 'return (statement-type statement))   (interpret-return statement environment return throw))
       ((eq? 'var (statement-type statement))      (interpret-declare statement environment next throw))
@@ -171,7 +177,7 @@
                    environment
                    (lambda (return-val) (next environment))
                    throw
-                   next)))
+                   (lambda (env) (next environment))))) ; Ignore the environment returned by the function call
         
     
 ; Calls the return continuation with the given expression value
@@ -179,7 +185,7 @@
   (lambda (statement environment return throw)
     (eval-expression (get-expr statement) environment (lambda (v) (return v)) throw)))
 
-; Adds a new variable binding to the environment.  There may be an assignment with the variable
+; Adds a new variable binding to the environment. There may be an assignment with the variable
 (define interpret-declare
   (lambda (statement environment next throw)
     (if (exists-declare-value? statement)
@@ -191,7 +197,7 @@
   (lambda (statement environment throw next)
     (eval-expression (get-assign-rhs statement) environment (lambda (v) (next (update (get-assign-lhs statement) v environment))) throw)))
 
-; We need to check if there is an else condition.  Otherwise, we evaluate the expression and do the right thing.
+; We need to check if there is an else condition. Otherwise, we evaluate the expression and do the right thing.
 (define interpret-if
   (lambda (statement environment return break continue throw next)
     (eval-expression (get-condition statement)
@@ -203,7 +209,7 @@
                          (else (next environment))))
                      throw)))
 
-; Interprets a while loop.  We must create break and continue continuations for this loop
+; Interprets a while loop. We must create break and continue continuations for this loop
 (define interpret-while
   (lambda (statement environment return throw next)
     (letrec ((loop (lambda (condition body environment)
@@ -211,12 +217,18 @@
                                       environment
                                       (lambda (condition-v)
                                         (if condition-v
-                                            (interpret-statement body environment return (lambda (env) (next env)) (lambda (env) (loop condition body env)) throw (lambda (env) (loop condition body env)))
+                                            (interpret-statement body
+                                                                 environment
+                                                                 return
+                                                                 (lambda (env) (next env))
+                                                                 (lambda (env) (loop condition body env))
+                                                                 throw
+                                                                 (lambda (env) (loop condition body env)))
                                             (next environment)))
                                       throw))))
     (loop (get-condition statement) (get-body statement) environment))))
 
-; Interprets a block.  The break, continue, throw and "next statement" continuations must be adjusted to pop the environment
+; Interprets a block. The break, continue, and "next statement" continuations must be adjusted to pop the environment
 (define interpret-block
   (lambda (statement environment return break continue throw next)
     (interpret-statement-list (cdr statement)
@@ -224,13 +236,14 @@
                               return
                               (lambda (env) (break (pop-frame env)))
                               (lambda (env) (continue (pop-frame env)))
-                              (lambda (v env) (throw v (pop-frame env)))
+                              throw ; Uses the current environent since changes inside the block are reflected in the boxes
                               (lambda (env) (next (pop-frame env))))))
+                              
 
-; We use a continuation to throw the proper value.  Because we are not using boxes, the environment/state must be thrown as well so any environment changes will be kept
+; We use a continuation to throw the proper value.  Because we are using boxes, the environment does not need to be thrown as well
 (define interpret-throw
   (lambda (statement environment throw)
-    (eval-expression (get-expr statement) environment (lambda (v) (throw v environment)) environment)))
+    (eval-expression (get-expr statement) environment (lambda (v) (throw v)) environment)))
 
 ; Interpret a try-catch-finally block
 
@@ -239,19 +252,19 @@
 (define create-throw-catch-continuation
   (lambda (catch-statement environment return break continue throw next finally-block)
     (cond
-      ((null? catch-statement) (lambda (ex env) (interpret-block finally-block env return break continue throw (lambda (env2) (throw ex env2))))) 
+      ((null? catch-statement) (lambda (ex env) (interpret-block finally-block env return break continue throw (lambda (env2) (throw ex))))) 
       ((not (eq? 'catch (statement-type catch-statement))) (error "Incorrect catch statement"))
-      (else (lambda (ex env)
+      (else (lambda (ex)
               (interpret-statement-list 
                (get-body catch-statement) 
-               (insert (catch-var catch-statement) ex (push-frame env))
+               (insert (catch-var catch-statement) ex (push-frame environment))
                return 
                (lambda (env2) (break (pop-frame env2))) 
                (lambda (env2) (continue (pop-frame env2))) 
-               (lambda (v env2) (throw v (pop-frame env2))) 
+               (lambda (v) (throw v)) 
                (lambda (env2) (interpret-block finally-block (pop-frame env2) return break continue throw next))))))))
 
-; To interpret a try block, we must adjust  the return, break, continue continuations to interpret the finally block if any of them are used.
+; To interpret a try block, we must adjust the return, break, continue continuations to interpret the finally block if any of them are used.
 ;  We must create a new throw continuation and then interpret the try block with the new continuations followed by the finally block with the old continuations
 (define interpret-try
   (lambda (statement environment return break continue throw next)
@@ -294,7 +307,7 @@
                    environment
                    (lambda (return-val) (value-cont return-val))
                    throw
-                   (lambda (env) (value-cont 'novalue))))) ; TODO how should we be handing getting value of function with no return?
+                   (lambda (env) (value-cont 'novalue)))))
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.

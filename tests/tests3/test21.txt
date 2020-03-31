@@ -1,0 +1,15 @@
+function main() {
+  var x = 1;
+  var y = 2;
+  if (x == 1) {
+	if (y == 2) {
+		var z;
+		z = 12;
+	}
+        else {
+ 		var z = 20;
+        }
+	var i = z;
+	return i;
+   }
+}
