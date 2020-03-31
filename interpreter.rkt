@@ -34,7 +34,7 @@
 (define compile
   (lambda (statement-list environment)
     (if (null? statement-list)
-        (eval-expression '(funcall main ())
+        (eval-expression '(funcall main)
                          environment
                          (lambda (v) v)
                          (lambda (v) (error "Uncaught exception thrown:")))
@@ -44,7 +44,7 @@
   (lambda (statement environment next)
     (cond
       ((eq? 'function (statement-type statement)) (next (insert (function-name statement) (create-function-closure statement environment) environment)))
-      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next))
+      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next (lambda (v env) (error "Uncaught exception thrown:" v))))
       (else                                       (error "Unknown statement:" (statement-type statement))))))
 
 
@@ -98,33 +98,33 @@
 
 ; Create the correct environment from the closure, bind the parameters, call the body
 (define call-function
-  (lambda (closure actual-params environment return throw)
+  (lambda (closure actual-params environment return throw next)
     (interpret-statement-list (closure-body closure)
                               (add-parameters
                                (closure-name closure)
                                actual-params
                                (closure-formal-params closure)
                                environment
-                               ((closure-environment-builder closure) environment))
+                               ((closure-environment-builder closure) environment)
+                               throw)
                               return
                               (lambda (env) (error "Break used outside of loop"))
                               (lambda (env) (error "Continue used outside of loop"))
                               throw
-                              identity)))
+                              next)))
 
 ; Evaluate the actual parameters to a function call and add them to the environment
 (define add-parameters
-  (lambda (function-name actual-params formal-params call-environment function-environment)
-    (print actual-params)
-    (print formal-params)
+  (lambda (function-name actual-params formal-params call-environment function-environment throw)
     (cond
       ((and (null? actual-params) (null? formal-params)) function-environment)
       ((or (null? actual-params) (null? formal-params)) (error "The actual parameters do not match the formal parameters for:" function-name))
       (else (add-parameters function-name
-                            (remaining-params actual-params) ; TODO fix this - actual params isnt actually a list - use cdr 
+                            (remaining-params actual-params)
                             (remaining-params formal-params)
                             call-environment
-                            (insert (first-param formal-params) (eval-expression (first-param actual-params) call-environment)))))))
+                            (insert (first-param formal-params) (eval-expression (first-param actual-params) call-environment (lambda (v) v) throw) function-environment)
+                            throw)))))
                                
 ; Function closure abstractions
 (define function-name cadr)
@@ -159,7 +159,7 @@
       ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled by creating global closures
       ((eq? 'funcall (statement-type statement))  (interpret-function statement environment next throw))
       ((eq? 'return (statement-type statement))   (interpret-return statement environment return throw))
-      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next))
+      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next throw))
       ((eq? '= (statement-type statement))        (interpret-assign statement environment throw next))
       ((eq? 'if (statement-type statement))       (interpret-if statement environment return break continue throw next))
       ((eq? 'while (statement-type statement))    (interpret-while statement environment return throw next))
@@ -177,42 +177,51 @@
                    (get-function-actual-params statement)
                    environment
                    (lambda (return-val) (next environment))
-                   throw))) ; TODO verify passing throw is correct
+                   throw
+                   next)))
         
     
 ; Calls the return continuation with the given expression value
 (define interpret-return
   (lambda (statement environment return throw)
-    (return (eval-expression (get-expr statement) environment (lambda (v) v) throw))))
+    (eval-expression (get-expr statement) environment (lambda (v) (return v)) throw)))
 
 ; Adds a new variable binding to the environment.  There may be an assignment with the variable
 (define interpret-declare
-  (lambda (statement environment next)
+  (lambda (statement environment next throw)
     (if (exists-declare-value? statement)
-        (next (insert (get-declare-var statement) (eval-expression (get-declare-value statement) environment (lambda (v) v) (lambda (v env) (error "Uncaught exception thrown:" v))) environment))
+        (eval-expression (get-declare-value statement) environment (lambda (v) (next (insert (get-declare-var statement) v environment))) throw)
         (next (insert (get-declare-var statement) 'novalue environment)))))
 
 ; Updates the environment to add a new binding for a variable
 (define interpret-assign
   (lambda (statement environment throw next)
-    (next (update (get-assign-lhs statement) (eval-expression (get-assign-rhs statement) environment (lambda (v) v) throw) environment))))
+    (eval-expression (get-assign-rhs statement) environment (lambda (v) (next (update (get-assign-lhs statement) v environment))) throw)))
 
 ; We need to check if there is an else condition.  Otherwise, we evaluate the expression and do the right thing.
 (define interpret-if
   (lambda (statement environment return break continue throw next)
-    (cond
-      ((eval-expression (get-condition statement) environment (lambda (v) v) throw) (interpret-statement (get-then statement) environment return break continue throw next))
-      ((exists-else? statement) (interpret-statement (get-else statement) environment return break continue throw next))
-      (else (next environment)))))
+    (eval-expression (get-condition statement)
+                     environment
+                     (lambda (condition)
+                       (cond
+                         (condition (interpret-statement (get-then statement) environment return break continue throw next))
+                         ((exists-else? statement) (interpret-statement (get-else statement) environment return break continue throw next))
+                         (else (next environment))))
+                     throw)))
 
 ; Interprets a while loop.  We must create break and continue continuations for this loop
 (define interpret-while
   (lambda (statement environment return throw next)
     (letrec ((loop (lambda (condition body environment)
-                     (if (eval-expression condition environment (lambda (v) v) throw)
-                         (interpret-statement body environment return (lambda (env) (next env)) (lambda (env) (loop condition body env)) throw (lambda (env) (loop condition body env)))
-                         (next environment)))))
-      (loop (get-condition statement) (get-body statement) environment))))
+                     (eval-expression condition
+                                      environment
+                                      (lambda (condition-v)
+                                        (if condition-v
+                                            (interpret-statement body environment return (lambda (env) (next env)) (lambda (env) (loop condition body env)) throw (lambda (env) (loop condition body env)))
+                                            (next environment)))
+                                      throw))))
+    (loop (get-condition statement) (get-body statement) environment))))
 
 ; Interprets a block.  The break, continue, throw and "next statement" continuations must be adjusted to pop the environment
 (define interpret-block
@@ -228,7 +237,7 @@
 ; We use a continuation to throw the proper value.  Because we are not using boxes, the environment/state must be thrown as well so any environment changes will be kept
 (define interpret-throw
   (lambda (statement environment throw)
-    (throw (eval-expression (get-expr statement) environment) environment)))
+    (eval-expression (get-expr statement) environment (lambda (v) (throw v environment)) environment)))
 
 ; Interpret a try-catch-finally block
 
@@ -273,8 +282,6 @@
       ((not (eq? (statement-type finally-statement) 'finally)) (error "Incorrectly formatted finally block"))
       (else (cons 'begin (cadr finally-statement))))))
 
-; *** TODO *** all the eval functions need to be converted to CPS so that they can have next and throw continuations
-
 ; Evaluates all possible boolean and arithmetic expressions, including constants and variables.
 (define eval-expression
   (lambda (expr environment value-cont throw)
@@ -293,7 +300,8 @@
                    (get-function-actual-params statement)
                    environment
                    (lambda (return-val) (value-cont return-val))
-                   throw))) ; TODO verify passing throw is correct
+                   throw
+                   (lambda (env) (value-cont 'novalue))))) ; TODO how should we be handing getting value of function with no return?
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.
@@ -382,7 +390,7 @@
 (define get-catch operand2)
 (define get-finally operand3)
 (define get-function-call-name cadr)
-(define get-function-actual-params caddr)
+(define get-function-actual-params cddr)
 
 (define catch-var
   (lambda (catch-statement)
