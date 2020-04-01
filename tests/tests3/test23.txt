@@ -1,0 +1,8 @@
+function getBool() {
+  var yes = 1 > 0;
+  return !yes;
+}
+
+function main() {
+  return getBool();
+}

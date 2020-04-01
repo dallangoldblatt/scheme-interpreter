@@ -1,0 +1,9 @@
+function getBool(x, y) {
+  return x || y;
+}
+
+function main() {
+  var yes = 1 > 0;
+  var no = 1 < 0; 
+  return getBool(yes, no);
+}

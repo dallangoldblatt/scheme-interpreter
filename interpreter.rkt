@@ -314,8 +314,8 @@
 (define eval-operator
   (lambda (expr environment value-cont throw)
     (cond
-      ((eq? '! (operator expr)) (not (eval-expression (operand1 expr) environment (lambda (v) (value-cont (not v))) throw)))
-      ((negation? expr) (- (eval-expression (operand1 expr) environment (lambda (v) (value-cont (* -1 v))) throw)))
+      ((eq? '! (operator expr)) (eval-expression (operand1 expr) environment (lambda (v) (value-cont (not v))) throw))
+      ((negation? expr) (eval-expression (operand1 expr) environment (lambda (v) (value-cont (* -1 v))) throw))
       (else (eval-expression (operand1 expr) environment (lambda (v1) (eval-binary-op2 expr v1 environment value-cont throw)) throw)))))
 
 ; Complete the evaluation of the binary operator by evaluating the second operand and performing the operation.

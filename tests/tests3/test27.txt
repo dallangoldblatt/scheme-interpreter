@@ -1,0 +1,7 @@
+function negate(x) {
+  return -x;
+}
+
+function main() {
+  return negate(10);
+}

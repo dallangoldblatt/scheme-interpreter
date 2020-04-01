@@ -6,15 +6,15 @@ function factOf5() {
           function factOf0() {
             return 1;
           }
-          return 1 * factof0();
+          return 1 * factOf0();
         }
-        return 2 * factof1();
+        return 2 * factOf1();
       }
-      return 3 * factof2();
+      return 3 * factOf2();
     }
-    return 4 * factof3();
+    return 4 * factOf3();
   }
-  return 5 * factof4();
+  return 5 * factOf4();
 }
 
 function main() {
