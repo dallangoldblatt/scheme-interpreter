@@ -24,5 +24,6 @@
 (check-expect (interpret "test19.txt") 100)
 (check-expect (interpret "test20.txt") 2000400)
 (check-error (interpret "test21.txt" "Variable referenced before declaration: z"))
+(check-expect (interpret "deep-recursion-test.txt") 64)
 
 (test)
