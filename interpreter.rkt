@@ -31,7 +31,7 @@
                          environment
                          (lambda (v) v)
                          (lambda (v) (error "Uncaught exception thrown:")))
-        (compile-statement (car statement-list) environment (lambda (env) (compile (cdr statement-list) env))))))
+        (compile-statement (first-statement statement-list) environment (lambda (env) (compile (remaining-statements statement-list) env))))))
 
 (define compile-statement
   (lambda (statement environment next)
@@ -58,7 +58,7 @@
   (lambda (function function-def-environment)
     (lambda (environment)
       (add-functions-to-environment ; Adds the closures of any nested functions to the built environment
-       (find-nested-function-definitions (function-body function) (push-frame environment) '())
+       (find-nested-function-definitions (function-body function) (push-frame environment) '()) ; Build the list of nested functions
        (push-frame (pop-n-frames (- (length environment) (length function-def-environment)) environment)))))) 
 
 ; Add a list of function closures to the top frame of the state
@@ -87,7 +87,7 @@
   (lambda (n environment)
     (if (<= n 0)
         environment
-        (pop-n-frames (- n 1) (cdr environment)))))
+        (pop-n-frames (- n 1) (remaining-frames environment)))))
 
 ; Create the correct environment from the closure, bind the parameters, call the body
 (define call-function
@@ -133,6 +133,7 @@
 (define remaining-functions cdr)
 (define first-param car)
 (define remaining-params cdr)
+(define remaining-frames cdr)
 
 ; ------------------------
 ; STATEMENT EXECUTION FUNCTIONS
