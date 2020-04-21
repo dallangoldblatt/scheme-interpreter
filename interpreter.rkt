@@ -1,6 +1,6 @@
 #lang racket
 
-(require "functionParser.rkt")
+(require "classParser.rkt")
 (provide (all-defined-out))
 
 ; An interpreter for the simple language using tail recursion for the M_state functions
