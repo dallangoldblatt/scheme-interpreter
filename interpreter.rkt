@@ -8,26 +8,75 @@
 ; The functions that start interpret-...  all return the current environment.  These are the M_state functions.
 ; The functions that start eval-...  all return a value.  These are the M_value and M_boolean functions.
 
-; The main function.  Calls parser to get the parse tree and interprets it with a new environment.
+; The main entrypoint  Calls parser to get the parse tree and interprets it with a new environment.
+; The class is entered as a string and must be converted to an s-expression
 (define interpret
-  (lambda (file)
+  (lambda (file class)
     (scheme->language
-     (compile (parser file) (newenvironment)))))
+     (compile (parser file) (newclassenv) (read (open-input-string class))))))
+
+; ------------------------------------------
+; CLASS DEFINITION LAYER 
+; ------------------------------------------
+
+; formats:
+; class:       (class A () body)
+;              (class B (extends A)  body)
+
+; Compiles (adds to environment) all class closures
+; Once all declarations have been handles, calls the main of the selected class
+(define compile
+  (lambda (class-list classenv main-class)
+    (if (null? class-list)
+        (eval-expression `(funcall (dot (new ,main-class) main))
+                         (newenvironment)    ; TODO we have to add the class definitions to this somehow -- another param to eval-expr?
+                         (lambda (v) v)
+                         (lambda (v) (error "Uncaught exception thrown:")))
+        (compile-class (first-class class-list) classenv (lambda (env) (compile (remaining-classes class-list) env main-class))))))
+
+(define compile-class
+  (lambda (declaration classenv next)
+    (cond
+      ((extends-class? declaration) (next (insert-class (class-name declaration) (create-extending-class-closure declaration classenv) classenv)))
+      ((eq? 'class (statement-type declaration))    (next (insert-class (class-name declaration) (create-class-closure declaration classenv) classenv)))
+      (else                                       (error "Unknown class declaration:" declaration)))))
+
+(define create-class-closure
+  (lambda (declaration environment) '())) ; TODO
+
+(define create-extending-class-closure
+  (lambda (declaration environment) '())) ; TODO
+
+; Class abstractions
+(define class-name cadr)
+(define first-class car)
+(define remaining-classes cdr)
+(define extends-class?
+  (lambda (statement)
+    (null? caddr)))
+(define extended-class
+  (lambda (statement)
+    (cadr (caddr statement))))
 
 ; ------------------------------------------
 ; GLOBAL VARIABLE AND FUNCTION DEFINITION LAYER 
 ; ------------------------------------------
 
-; formats: 
-; function: (function name (params) ((body)
-; closure:  (name (params) ((body)) (state-function)
+; TODO this becomes the layer for creating the class closure
+; scan though vars and methods and add to the state
+; I think that we should handle initialized vars by assigning their values in the beginning of the default constructor
+
+; formats:
+; constructor: (constructor (x) body) 
+; function:    (function name (params) ((body)
+; closure:     (name (params) ((body)) (state-function)
 
 ; Compiles (adds to environment) global variables and function declarations.
 ; Once all statements have been handled, call main() 
-(define compile
+(define compile-vars-and-functions
   (lambda (statement-list environment)
     (if (null? statement-list)
-        (eval-expression '(funcall main)
+        (eval-expression '(funcall main) ; TODO remove this, return the closure to class compile
                          environment
                          (lambda (v) v)
                          (lambda (v) (error "Uncaught exception thrown:")))
@@ -408,6 +457,10 @@
 ; Environment/State Functions
 ;------------------------
 
+; create a new class environment
+(define newclassenv
+  (lambda () '()))
+
 ; create a new empty environment
 (define newenvironment
   (lambda ()
@@ -497,6 +550,18 @@
     (if (exists-in-list? var (variables (car environment)))
         (error "Variable already declared:" var)
         (cons (add-to-frame var val (car environment)) (cdr environment)))))
+
+; Adds a new class closure to the class environment
+(define insert-class
+  (lambda (var val classenv)
+    (if (class-exists? var classenv)
+        (error "Class already declared:" var)
+        (cons val classenv))))
+
+; Checks if a class has already been declared
+(define class-exists?
+  (lambda (name classenv)
+    #f)) ; TODO this
 
 ; Changes the binding of a variable to a new value in the environment.  Gives an error if the variable does not exist.
 (define update
