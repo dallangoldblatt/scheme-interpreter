@@ -13,7 +13,7 @@
 (define interpret
   (lambda (file class)
     (scheme->language
-     (compile (parser file) (newclassenv) (read (open-input-string class))))))
+     (compile (parser file) (newframe) (read (open-input-string class))))))
 
 ; ------------------------------------------
 ; CLASS DEFINITION LAYER 
@@ -21,7 +21,8 @@
 
 ; formats:
 ; class:       (class A () body)
-;              (class B (extends A)  body)
+;              (class B (extends A) body)
+; c closure    (super methods fields constructor)
 
 ; Compiles (adds to environment) all class closures
 ; Once all declarations have been handles, calls the main of the selected class
@@ -37,26 +38,29 @@
 (define compile-class
   (lambda (declaration classenv next)
     (cond
-      ((extends-class? declaration) (next (insert-class (class-name declaration) (create-extending-class-closure declaration classenv) classenv)))
-      ((eq? 'class (statement-type declaration))    (next (insert-class (class-name declaration) (create-class-closure declaration classenv) classenv)))
-      (else                                       (error "Unknown class declaration:" declaration)))))
-
-(define create-class-closure
-  (lambda (declaration environment) '())) ; TODO
+      ((extends-class? declaration)              (next (add-to-frame (class-name declaration) (create-extending-class-closure declaration classenv) classenv)))
+      ((eq? 'class (statement-type declaration)) (next (add-to-frame (class-name declaration) (create-class-closure declaration classenv) classenv)))
+      (else                                      (error "Expected class declaration:" declaration)))))
 
 (define create-extending-class-closure
   (lambda (declaration environment) '())) ; TODO
 
+(define create-class-closure
+  (lambda (declaration classenv) '())) ; TODO
+
+;; The list of class definitions is held in a single frame: '((names) (closures))
+
 ; Class abstractions
 (define class-name cadr)
-(define first-class car)
-(define remaining-classes cdr)
+(define class-body cadddr)
 (define extends-class?
   (lambda (statement)
     (null? caddr)))
-(define extended-class
+(define super-class
   (lambda (statement)
     (cadr (caddr statement))))
+(define first-class car)
+(define remaining-classes cdr)
 
 ; ------------------------------------------
 ; GLOBAL VARIABLE AND FUNCTION DEFINITION LAYER 
@@ -69,26 +73,62 @@
 ; formats:
 ; constructor: (constructor (x) body) 
 ; function:    (function name (params) ((body)
-; closure:     (name (params) ((body)) (state-function)
+; f closure:   (name (params) ((body)) (state-function)
 
-; Compiles (adds to environment) global variables and function declarations.
-; Once all statements have been handled, call main() 
-(define compile-vars-and-functions
-  (lambda (statement-list environment)
-    (if (null? statement-list)
-        (eval-expression '(funcall main) ; TODO remove this, return the closure to class compile
-                         environment
-                         (lambda (v) v)
-                         (lambda (v) (error "Uncaught exception thrown:")))
-        (compile-statement (first-statement statement-list) environment (lambda (env) (compile (remaining-statements statement-list) env))))))
+; Compiles class methods, variables, and constructors
+; Each must be handled separately, since varibles can call methods, and the constructor needs both
 
-(define compile-statement
-  (lambda (statement environment next)
+(define compile-methods
+  (lambda (statement-list method-list temp-env return)
     (cond
-      ((eq? 'function (statement-type statement)) (next (insert (function-name statement) (create-function-closure statement environment) environment)))
-      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next (lambda (v) (error "Uncaught exception thrown:" v))))
-      (else                                       (error "Unknown statement:" (statement-type statement))))))
+      ((null? statement-list) (return method-list temp-env))
+      ((not (method-declaration? (first-statement statement-list))) compile-methods (remaining-statements statement-list) method-list temp-env return)   
+      (else (compile-method (first-statement statement-list) temp-env (lambda (m v) (compile-methods (remaining-statements statement-list) (cons m method-list) v return)))))))
 
+(define compile-method
+  (lambda (statement temp-env return)
+    (return  (create-function-closure statement temp-env)
+             temp-env))) ; TODO should we be concerned with making the method callable for instance vars?
+
+(define compile-vars
+  (lambda (statement-list var-list val-list temp-env return)
+    (cond
+      ((null? statement-list) (return var-list val-list temp-env))
+      ((not (eq? 'var (statement-type (first-statement statement-list)))) (compile-vars (remaining-statements statement-list) var-list val-list temp-env return))   
+      (else (compile-var (first-statement statement-list) temp-env (lambda (var val v) (compile-vars (remaining-statements statement-list)
+                                                                                                     (cons var var-list)
+                                                                                                     (cons val val-list)
+                                                                                                     (insert var val temp-env))))))))
+
+(define compile-var
+  (lambda (statement temp-env return)
+    (interpret-declare statement
+                       temp-env
+                       (lambda (v)
+                         (return
+                          (get-declare-var statement)
+                          (lookup (get-declare-var statement) v)
+                          v))
+                       (lambda (v) (error "Uncaught exception thrown:" v)))))
+
+(define find-constructor
+  (lambda (statement-list var-list val-list method-list return)
+    (cond
+      ((null? statement-list) (error "Missing constructor"))
+      ((not (eq? 'constructor (statement-type (first-statement statement-list)))) (find-constructor (remaining-statements statement-list) var-list val-list method-list return))   
+      (else (compile-constructor (first-statement statement-list) var-list val-list method-list return)))))
+
+(define compile-constructor
+  (lambda (statement var-list val-list method-list return)
+    ; creates a function that runs the body in an environment and returns an instance closure with variables/methods initialized
+    ; TODO
+    (return (create-function-closure
+             (list 
+             'wehavetomakeafunction)))))
+
+(define method-declaration?
+  (lambda (statement)
+    (or (eq? 'function (statement-type (statement)) (eq? 'static-function (statement-type (statement)))))))
 
 ;--------------------------------------
 ; FUNCTION DEFINITION AND EXECUTION HANDLING
@@ -98,7 +138,7 @@
 (define create-function-closure
   (lambda (function environment)
     (list (function-name function)
-          (function-params function)
+          (function-params function)  ; TODO replace with  (cons 'this (function-params function)) when actual params supports it
           (function-body function)
           (create-environment-builder function environment))))
 
@@ -144,7 +184,7 @@
     (interpret-statement-list (closure-body closure)
                               (add-parameters
                                (closure-name closure)
-                               actual-params
+                               actual-params   ; TODO add the actual instance for this to beginning of actual params
                                (closure-formal-params closure)
                                environment
                                ((closure-environment-builder closure) environment)
@@ -276,7 +316,7 @@
                                                                  (lambda (env) (loop condition body env)))
                                             (next environment)))
                                       throw))))
-    (loop (get-condition statement) (get-body statement) environment))))
+      (loop (get-condition statement) (get-body statement) environment))))
 
 ; Interprets a block. The break, continue, and "next statement" continuations must be adjusted to pop the environment
 (define interpret-block
@@ -457,10 +497,6 @@
 ; Environment/State Functions
 ;------------------------
 
-; create a new class environment
-(define newclassenv
-  (lambda () '()))
-
 ; create a new empty environment
 (define newenvironment
   (lambda ()
@@ -550,13 +586,6 @@
     (if (exists-in-list? var (variables (car environment)))
         (error "Variable already declared:" var)
         (cons (add-to-frame var val (car environment)) (cdr environment)))))
-
-; Adds a new class closure to the class environment
-(define insert-class
-  (lambda (var val classenv)
-    (if (class-exists? var classenv)
-        (error "Class already declared:" var)
-        (cons val classenv))))
 
 ; Checks if a class has already been declared
 (define class-exists?
