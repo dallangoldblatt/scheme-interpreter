@@ -5,11 +5,12 @@
 
 ; An interpreter for the simple language using tail recursion for the M_state functions
 
+; Functions that start compile-...  all set up class/function closuere prior to program executuon.
 ; The functions that start interpret-...  all return the current environment.  These are the M_state functions.
 ; The functions that start eval-...  all return a value.  These are the M_value and M_boolean functions.
 
-; The main entrypoint  Calls parser to get the parse tree and interprets it with a new environment.
-; The class is entered as a string and must be converted to an s-expression
+; The main entrypoint.  Calls parser to get the parse tree and interprets it with a new environment.
+; The class is entered as a string and must be converted to an s-expression using read
 (define interpret
   (lambda (file class)
     (scheme->language
@@ -22,117 +23,175 @@
 ; formats:
 ; class:       (class A () body)
 ;              (class B (extends A) body)
-; c closure    (super methods fields constructor)
+; c closure:   (super methods field-names field-defs main constructor)
 
-; Compiles (adds to environment) all class closures
-; Once all declarations have been handles, calls the main of the selected class
+; Compiles all class closures
+; The list of class definitions is held in a single frame: '((names) (closures))
+; Once all declarations have been handled, calls main of the selected class
 (define compile
-  (lambda (class-list classenv main-class)
-    (if (null? class-list)
-        (eval-expression `(funcall (dot (new ,main-class) main))
-                         (newenvironment)    ; TODO we have to add the class definitions to this somehow -- another param to eval-expr?
-                         (lambda (v) v)
-                         (lambda (v) (error "Uncaught exception thrown:")))
-        (compile-class (first-class class-list) classenv (lambda (env) (compile (remaining-classes class-list) env main-class))))))
+  (lambda (class-declarations class-list main-class)
+    (if (null? class-declarations)
+        ;(eval-expression `(funcall (dot (new ,main-class) main))       ; TODO uncomment this and remove below when dot is working
+        ;                 (newenvironment)
+        ;                 class-list
+        ;                 (lambda (v) v)
+        ;                 (lambda (v) (error "Uncaught exception thrown:")))
+        (interpret-statement-list (closure-main (lookup-in-frame main-class class-list))
+                                  (newenvironment)
+                                  class-list
+                                  (lambda (v) v)
+                                  (lambda (env) (error "Break used outside of loop"))
+                                  (lambda (env) (error "Continue used outside of loop"))
+                                  (lambda (v) (error "Uncaught exception thrown:"))
+                                  (lambda (env) (error "No return value for main")))
+        (compile-class (first-class class-declarations) class-list (lambda (cl) (compile (remaining-classes class-declarations) cl main-class))))))
 
+; Add the closure of a class to the current class closure list
 (define compile-class
-  (lambda (declaration classenv next)
+  (lambda (declaration class-list next)
     (cond
-      ((extends-class? declaration)              (next (add-to-frame (class-name declaration) (create-extending-class-closure declaration classenv) classenv)))
-      ((eq? 'class (statement-type declaration)) (next (add-to-frame (class-name declaration) (create-class-closure declaration classenv) classenv)))
+      ((extends-class? declaration)              (next (add-to-frame (class-name declaration)
+                                                                     (create-class-closure declaration
+                                                                                           (super-class declaration)
+                                                                                           (lookup-in-frame (super-class declaration) class-list))
+                                                                     class-list)))
+      ((eq? 'class (statement-type declaration)) (next (add-to-frame (class-name declaration)
+                                                                     (create-class-closure declaration
+                                                                                           '_nosuper
+                                                                                           '())
+                                                                     class-list)))
       (else                                      (error "Expected class declaration:" declaration)))))
 
-(define create-extending-class-closure
-  (lambda (declaration environment) '())) ; TODO
-
+; TODO make this prettier? It does nearly the same thing in both cases
+; Create the closure for a class from its definition
 (define create-class-closure
-  (lambda (declaration classenv) '())) ; TODO
+  (lambda (declaration super-name super-closure)
+    (if (null? super-closure)
+        (compile-class-definition
+         (class-body declaration)
+         '()
+         '() ; This function uses a custom return function with multiple values
+         '() ; so empty lists have to be supplied for the recursion
+         '()
+         (lambda (var-list val-list method-list main)
+           (list super-name
+                 method-list
+                 var-list
+                 val-list
+                 main
+                 (create-default-constructor (class-name declaration) val-list super-closure))))
+        ; Get the var names and defs from super closure
+        (compile-class-definition
+         (class-body declaration)
+         (closure-field-names super-closure)
+         (closure-field-defs super-closure)
+         (closure-methods super-closure)
+         '()
+         (lambda (var-list val-list method-list main)
+           (list super-name
+                 method-list
+                 var-list
+                 val-list
+                 main
+                 (create-default-constructor (class-name declaration) val-list super-closure)))))))
 
-;; The list of class definitions is held in a single frame: '((names) (closures))
+; Compiles class methods and variables and returns them in lists
+; The only static function that is handled is main()
+(define compile-class-definition
+  (lambda (statement-list var-list val-list method-list main return)
+    (if (null? statement-list)
+        (return var-list val-list method-list main)
+        (compile-statement (first-statement statement-list)
+                           var-list
+                           val-list
+                           method-list
+                           main
+                           (lambda (va vl ml ma) (compile-class-definition (remaining-statements statement-list) va vl ml ma return))))))
 
+; Handle a single statement inside a class definition
+(define compile-statement
+  (lambda (statement var-list val-list method-list main return)
+    (cond
+      ; The only static method is the main method
+      ((eq? 'static-function (statement-type statement)) (return var-list val-list method-list (function-body statement)))
+      ; Create the function closure for a method, the environment should be top-level for the instance TODO maybe even empty?
+      ((eq? 'function (statement-type statement)) (return var-list val-list (cons (create-function-closure statement (newenvironment)) method-list) main))
+      ; Add the variable and value to the variable list, the value is not evaluated until instantiation
+      ((eq? 'var (statement-type statement)) (get-var-and-value statement (lambda (var val) (return (cons var var-list) (cons val val-list) method-list main))))
+      ; Overloaded constructors not supported
+      ((eq? 'constructor (statement-type statement)) (error "User-defined constructors are not supported"))
+      (else (error "Unexpected statement in class definition:" statement)))))
+
+; Extracts the variable name and value from the declaration
+(define get-var-and-value
+  (lambda (statement return)
+    (if (exists-declare-value? statement)
+        (return (get-declare-var statement) (get-declare-value statement))
+        (return (get-declare-var statement) 'novalue))))
+
+; Creates a default constructor that returns an instance in a given environment
+; instance closure: (runtime-type field-values)
+(define create-default-constructor
+  (lambda (class field-defs super-closure)
+    (lambda (environment class-list)
+      (list class
+            (reverse (eval-instance-vars class field-defs super-closure class-list environment))))))
+
+; Evaluates the instance variables for a class and its super classes
+; Returns every value together in a list
+; TODO verify that this accumulates all values for super class too, currently only verified for top-level classes
+(define eval-instance-vars
+  (lambda (class field-defs super-closure class-list environment)
+    (if (null? super-closure)
+        (eval-class-instance-vars field-defs class-list environment)
+        (append (eval-class-instance-vars class class-list environment)
+                (eval-instance-vars (closure-field-defs (closure-super (lookup-in-frame class class-list))) class-list environment)))))
+
+; Evaluates the instance variables for one class
+; Returns every value together in a list
+(define eval-class-instance-vars
+  (lambda (field-defs class-list environment)
+    (if (null? field-defs)
+        '()
+        (cons (eval-expression (first-def field-defs)
+                               class-list
+                               environment
+                               (lambda (v) v)
+                               (lambda (v) (error "Exception in init:"))) ; TODO I guess a try could be passed to the instance creator
+              (eval-class-instance-vars (remaining-defs field-defs) class-list environment)))))
+               
 ; Class abstractions
 (define class-name cadr)
 (define class-body cadddr)
 (define extends-class?
   (lambda (statement)
-    (null? caddr)))
+    (not (null? (caddr statement)))))
 (define super-class
   (lambda (statement)
     (cadr (caddr statement))))
+(define first-def car)
+(define remaining-defs cdr)
 (define first-class car)
 (define remaining-classes cdr)
-
-; ------------------------------------------
-; GLOBAL VARIABLE AND FUNCTION DEFINITION LAYER 
-; ------------------------------------------
-
-; TODO this becomes the layer for creating the class closure
-; scan though vars and methods and add to the state
-; I think that we should handle initialized vars by assigning their values in the beginning of the default constructor
-
-; formats:
-; constructor: (constructor (x) body) 
-; function:    (function name (params) ((body)
-; f closure:   (name (params) ((body)) (state-function)
-
-; Compiles class methods, variables, and constructors
-; Each must be handled separately, since varibles can call methods, and the constructor needs both
-
-(define compile-methods
-  (lambda (statement-list method-list temp-env return)
-    (cond
-      ((null? statement-list) (return method-list temp-env))
-      ((not (method-declaration? (first-statement statement-list))) compile-methods (remaining-statements statement-list) method-list temp-env return)   
-      (else (compile-method (first-statement statement-list) temp-env (lambda (m v) (compile-methods (remaining-statements statement-list) (cons m method-list) v return)))))))
-
-(define compile-method
-  (lambda (statement temp-env return)
-    (return  (create-function-closure statement temp-env)
-             temp-env))) ; TODO should we be concerned with making the method callable for instance vars?
-
-(define compile-vars
-  (lambda (statement-list var-list val-list temp-env return)
-    (cond
-      ((null? statement-list) (return var-list val-list temp-env))
-      ((not (eq? 'var (statement-type (first-statement statement-list)))) (compile-vars (remaining-statements statement-list) var-list val-list temp-env return))   
-      (else (compile-var (first-statement statement-list) temp-env (lambda (var val v) (compile-vars (remaining-statements statement-list)
-                                                                                                     (cons var var-list)
-                                                                                                     (cons val val-list)
-                                                                                                     (insert var val temp-env))))))))
-
-(define compile-var
-  (lambda (statement temp-env return)
-    (interpret-declare statement
-                       temp-env
-                       (lambda (v)
-                         (return
-                          (get-declare-var statement)
-                          (lookup (get-declare-var statement) v)
-                          v))
-                       (lambda (v) (error "Uncaught exception thrown:" v)))))
-
-(define find-constructor
-  (lambda (statement-list var-list val-list method-list return)
-    (cond
-      ((null? statement-list) (error "Missing constructor"))
-      ((not (eq? 'constructor (statement-type (first-statement statement-list)))) (find-constructor (remaining-statements statement-list) var-list val-list method-list return))   
-      (else (compile-constructor (first-statement statement-list) var-list val-list method-list return)))))
-
-(define compile-constructor
-  (lambda (statement var-list val-list method-list return)
-    ; creates a function that runs the body in an environment and returns an instance closure with variables/methods initialized
-    ; TODO
-    (return (create-function-closure
-             (list 
-             'wehavetomakeafunction)))))
-
-(define method-declaration?
-  (lambda (statement)
-    (or (eq? 'function (statement-type (statement)) (eq? 'static-function (statement-type (statement)))))))
+(define closure-super car)
+(define closure-methods cadr)
+(define closure-field-names caddr)
+(define closure-field-defs cadddr)
+(define closure-main
+  (lambda (closure)
+    (if (null? (cadr (cdddr closure)))
+        (error "Cannot call missing main method")
+        (cadr (cdddr closure)))))
+(define closure-constructor
+  (lambda (closure)
+    (caddr (cdddr closure))))
 
 ;--------------------------------------
 ; FUNCTION DEFINITION AND EXECUTION HANDLING
 ;--------------------------------------
+; formats:
+; function:    (function name (params) ((body)
+; f closure:   (name (params) ((body)) (state-function)
 
 ; Creates the closure for a newly defined function
 (define create-function-closure
@@ -184,7 +243,7 @@
     (interpret-statement-list (closure-body closure)
                               (add-parameters
                                (closure-name closure)
-                               actual-params   ; TODO add the actual instance for this to beginning of actual params
+                               actual-params   ; TODO add the actual instance for 'this' to beginning of actual params if not nested fun call
                                (closure-formal-params closure)
                                environment
                                ((closure-environment-builder closure) environment)
@@ -230,38 +289,39 @@
 
 ; interprets a list of statements. The state/environment from each statement is used for the next ones.
 (define interpret-statement-list
-  (lambda (statement-list environment return break continue throw next)
+  (lambda (statement-list environment class-list return break continue throw next)
     (if (null? statement-list)
         (next environment)
         (interpret-statement (car statement-list)
                              environment
+                             class-list
                              return
                              break
                              continue
                              throw
-                             (lambda (env) (interpret-statement-list (cdr statement-list) env return break continue throw next))))))
+                             (lambda (env) (interpret-statement-list (cdr statement-list) env class-list return break continue throw next))))))
 
 ; interpret a statement in the environment with continuations for return, break, continue, throw, and "next statement"
 (define interpret-statement
-  (lambda (statement environment return break continue throw next)
+  (lambda (statement environment class-list return break continue throw next)
     (cond
       ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled in global compile
-      ((eq? 'funcall (statement-type statement))  (interpret-function statement environment next throw))
-      ((eq? 'return (statement-type statement))   (interpret-return statement environment return throw))
-      ((eq? 'var (statement-type statement))      (interpret-declare statement environment next throw))
-      ((eq? '= (statement-type statement))        (interpret-assign statement environment throw next))
-      ((eq? 'if (statement-type statement))       (interpret-if statement environment return break continue throw next))
-      ((eq? 'while (statement-type statement))    (interpret-while statement environment return throw next))
+      ((eq? 'funcall (statement-type statement))  (interpret-function statement environment class-list next throw))
+      ((eq? 'return (statement-type statement))   (interpret-return statement environment class-list return throw))
+      ((eq? 'var (statement-type statement))      (interpret-declare statement environment class-list next throw))
+      ((eq? '= (statement-type statement))        (interpret-assign statement environment class-list throw next))
+      ((eq? 'if (statement-type statement))       (interpret-if statement environment class-list return break continue throw next))
+      ((eq? 'while (statement-type statement))    (interpret-while statement environment class-list return throw next))
       ((eq? 'continue (statement-type statement)) (continue environment))
       ((eq? 'break (statement-type statement))    (break environment))
-      ((eq? 'begin (statement-type statement))    (interpret-block statement environment return break continue throw next))
-      ((eq? 'throw (statement-type statement))    (interpret-throw statement environment throw))
-      ((eq? 'try (statement-type statement))      (interpret-try statement environment return break continue throw next))
+      ((eq? 'begin (statement-type statement))    (interpret-block statement environment class-list return break continue throw next))
+      ((eq? 'throw (statement-type statement))    (interpret-throw statement environment class-list throw))
+      ((eq? 'try (statement-type statement))      (interpret-try statement environment class-list return break continue throw next))
       (else                                       (error "Unknown statement:" (statement-type statement))))))
 
 ; Calls a function and ignores the return value (since this function is being called outside of an assignment)
 (define interpret-function
-  (lambda (statement environment next throw)
+  (lambda (statement environment class-list next throw)
     (call-function (lookup (get-function-call-name statement) environment)
                    (get-function-actual-params statement)
                    environment
@@ -272,43 +332,46 @@
     
 ; Calls the return continuation with the given expression value
 (define interpret-return
-  (lambda (statement environment return throw)
-    (eval-expression (get-expr statement) environment (lambda (v) (return v)) throw)))
+  (lambda (statement environment class-list return throw)
+    (eval-expression (get-expr statement) environment class-list (lambda (v) (return v)) throw)))
 
 ; Adds a new variable binding to the environment. There may be an assignment with the variable
 (define interpret-declare
-  (lambda (statement environment next throw)
+  (lambda (statement environment class-list next throw)
     (if (exists-declare-value? statement)
-        (eval-expression (get-declare-value statement) environment (lambda (v) (next (insert (get-declare-var statement) v environment))) throw)
+        (eval-expression (get-declare-value statement) environment class-list (lambda (v) (next (insert (get-declare-var statement) v environment))) throw)
         (next (insert (get-declare-var statement) 'novalue environment)))))
 
 ; Updates the environment to add a new binding for a variable
 (define interpret-assign
-  (lambda (statement environment throw next)
+  (lambda (statement environment class-list throw next)
     (eval-expression (get-assign-rhs statement) environment (lambda (v) (next (update (get-assign-lhs statement) v environment))) throw)))
 
 ; We need to check if there is an else condition. Otherwise, we evaluate the expression and do the right thing.
 (define interpret-if
-  (lambda (statement environment return break continue throw next)
+  (lambda (statement environment class-list return break continue throw next)
     (eval-expression (get-condition statement)
                      environment
+                     class-list
                      (lambda (condition)
                        (cond
-                         (condition (interpret-statement (get-then statement) environment return break continue throw next))
-                         ((exists-else? statement) (interpret-statement (get-else statement) environment return break continue throw next))
+                         (condition (interpret-statement (get-then statement) environment class-list return break continue throw next))
+                         ((exists-else? statement) (interpret-statement (get-else statement) environment class-list return break continue throw next))
                          (else (next environment))))
                      throw)))
 
 ; Interprets a while loop. We must create break and continue continuations for this loop
 (define interpret-while
-  (lambda (statement environment return throw next)
+  (lambda (statement environment class-list return throw next)
     (letrec ((loop (lambda (condition body environment)
                      (eval-expression condition
                                       environment
+                                      class-list
                                       (lambda (condition-v)
                                         (if condition-v
                                             (interpret-statement body
                                                                  environment
+                                                                 class-list
                                                                  return
                                                                  (lambda (env) (next env))
                                                                  (lambda (env) (loop condition body env))
@@ -320,9 +383,10 @@
 
 ; Interprets a block. The break, continue, and "next statement" continuations must be adjusted to pop the environment
 (define interpret-block
-  (lambda (statement environment return break continue throw next)
+  (lambda (statement environment class-list return break continue throw next)
     (interpret-statement-list (cdr statement)
                               (push-frame environment)
+                              class-list
                               return
                               (lambda (env) (break (pop-frame env)))
                               (lambda (env) (continue (pop-frame env)))
@@ -332,22 +396,23 @@
 
 ; We use a continuation to throw the proper value.  Because we are using boxes, the environment does not need to be thrown as well
 (define interpret-throw
-  (lambda (statement environment throw)
-    (eval-expression (get-expr statement) environment (lambda (v) (throw v)) environment)))
+  (lambda (statement environment class-list throw)
+    (eval-expression (get-expr statement) environment class-list (lambda (v) (throw v)) environment)))
 
 ; Interpret a try-catch-finally block
 
 ; Create a continuation for the throw.  If there is no catch, it has to interpret the finally block, and once that completes throw the exception.
 ;   Otherwise, it interprets the catch block with the exception bound to the thrown value and interprets the finally block when the catch is done
 (define create-throw-catch-continuation
-  (lambda (catch-statement environment return break continue throw next finally-block)
+  (lambda (catch-statement environment class-list return break continue throw next finally-block)
     (cond
-      ((null? catch-statement) (lambda (ex env) (interpret-block finally-block env return break continue throw (lambda (env2) (throw ex))))) 
+      ((null? catch-statement) (lambda (ex env) (interpret-block finally-block env class-list return break continue throw (lambda (env2) (throw ex))))) 
       ((not (eq? 'catch (statement-type catch-statement))) (error "Incorrect catch statement"))
       (else (lambda (ex)
               (interpret-statement-list 
                (get-body catch-statement) 
                (insert (catch-var catch-statement) ex (push-frame environment))
+               class-list
                return 
                (lambda (env2) (break (pop-frame env2))) 
                (lambda (env2) (continue (pop-frame env2))) 
@@ -357,14 +422,14 @@
 ; To interpret a try block, we must adjust the return, break, continue continuations to interpret the finally block if any of them are used.
 ;  We must create a new throw continuation and then interpret the try block with the new continuations followed by the finally block with the old continuations
 (define interpret-try
-  (lambda (statement environment return break continue throw next)
+  (lambda (statement environment class-list return break continue throw next)
     (let* ((finally-block (make-finally-block (get-finally statement)))
            (try-block (make-try-block (get-try statement)))
-           (new-return (lambda (v) (interpret-block finally-block environment return break continue throw (lambda (env2) (return v)))))
-           (new-break (lambda (env) (interpret-block finally-block env return break continue throw (lambda (env2) (break env2)))))
-           (new-continue (lambda (env) (interpret-block finally-block env return break continue throw (lambda (env2) (continue env2)))))
-           (new-throw (create-throw-catch-continuation (get-catch statement) environment return break continue throw next finally-block)))
-      (interpret-block try-block environment new-return new-break new-continue new-throw (lambda (env) (interpret-block finally-block env return break continue throw next))))))
+           (new-return (lambda (v) (interpret-block finally-block environment class-list return break continue throw (lambda (env2) (return v)))))
+           (new-break (lambda (env) (interpret-block finally-block env class-list return break continue throw (lambda (env2) (break env2)))))
+           (new-continue (lambda (env) (interpret-block finally-block env class-list return break continue throw (lambda (env2) (continue env2)))))
+           (new-throw (create-throw-catch-continuation (get-catch statement) environment class-list return break continue throw next finally-block)))
+      (interpret-block try-block environment class-list new-return new-break new-continue new-throw (lambda (env) (interpret-block finally-block env class-list return break continue throw next))))))
 
 ; helper methods so that I can reuse the interpret-block method on the try and finally blocks
 (define make-try-block
@@ -380,39 +445,53 @@
 
 ; Evaluates all possible boolean and arithmetic expressions, including constants and variables.
 (define eval-expression
-  (lambda (expr environment value-cont throw)
+  (lambda (expr environment class-list value-cont throw)
     (cond
       ((number? expr) (value-cont expr))
       ((eq? expr 'true) (value-cont #t))
       ((eq? expr 'false) (value-cont #f))
-      ((function-call? expr) (eval-function expr environment value-cont throw))
-      ((not (list? expr)) (value-cont (lookup expr environment)))
-      (else (eval-operator expr environment value-cont throw)))))
+      ((eq? (operator expr) 'new) (value-cont (eval-constructor (operand1 expr) environment class-list))) 
+      ((eq? (operator expr) 'dot) (value-cont 0)) ; TODO find varible in class-list from instance runtime type -- this needs a new lookup function using class-list and instance closure
+      ((function-call? expr) (eval-function expr environment class-list value-cont throw))
+      ((not (list? expr)) (value-cont (lookup expr environment))) ; TODO Needs to search env and then instance vars
+      (else (eval-operator expr environment class-list value-cont throw)))))
+
+; Create and return new instance of a class
+; TODO return a new instance by calling construnctor in class-list
+(define eval-constructor
+  (lambda (class environment class-list)
+    ((closure-constructor (lookup-in-frame class class-list)) environment class-list)))
 
 ; Get the value returned by a function call
+; TODO search in class methods before environment by handling dot
+;      the environment only holds nested functions
 (define eval-function
-  (lambda (statement environment value-cont throw)
-    (call-function (lookup (get-function-call-name statement) environment)
-                   (get-function-actual-params statement)
-                   environment
-                   (lambda (return-val) (value-cont return-val))
-                   throw
-                   (lambda (env) (value-cont 'novalue)))))
+  (lambda (statement environment class-list value-cont throw)
+    (if (list? (get-function-call-name statement))
+        (error "TODO handle dot here")
+        (call-function (lookup (get-function-call-name statement) environment)
+                       (get-function-actual-params statement)
+                       environment
+                       class-list
+                       (lambda (return-val) (value-cont return-val))
+                       throw
+                       (lambda (env) (value-cont 'novalue))))))
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.
 (define eval-operator
-  (lambda (expr environment value-cont throw)
+  (lambda (expr environment class-list value-cont throw)
     (cond
-      ((eq? '! (operator expr)) (eval-expression (operand1 expr) environment (lambda (v) (value-cont (not v))) throw))
-      ((negation? expr) (eval-expression (operand1 expr) environment (lambda (v) (value-cont (* -1 v))) throw))
-      (else (eval-expression (operand1 expr) environment (lambda (v1) (eval-binary-op2 expr v1 environment value-cont throw)) throw)))))
+      ((eq? '! (operator expr)) (eval-expression (operand1 expr) environment class-list (lambda (v) (value-cont (not v))) throw))
+      ((negation? expr) (eval-expression (operand1 expr) environment class-list (lambda (v) (value-cont (* -1 v))) throw))
+      (else (eval-expression (operand1 expr) environment class-list (lambda (v1) (eval-binary-op2 expr v1 environment class-list value-cont throw)) throw)))))
 
 ; Complete the evaluation of the binary operator by evaluating the second operand and performing the operation.
 (define eval-binary-op2
-  (lambda (expr v1 environment value-cont throw)
+  (lambda (expr v1 environment class-list value-cont throw)
     (eval-expression (operand2 expr)
                      environment
+                     class-list
                      (lambda (v2)
                        (cond
                          ((eq? '+ (operator expr))  (value-cont (+  v1 v2)))
@@ -586,11 +665,6 @@
     (if (exists-in-list? var (variables (car environment)))
         (error "Variable already declared:" var)
         (cons (add-to-frame var val (car environment)) (cdr environment)))))
-
-; Checks if a class has already been declared
-(define class-exists?
-  (lambda (name classenv)
-    #f)) ; TODO this
 
 ; Changes the binding of a variable to a new value in the environment.  Gives an error if the variable does not exist.
 (define update
