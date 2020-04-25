@@ -159,6 +159,16 @@
                                (lambda (v) v)
                                (lambda (v) (error "Exception in init:"))) ; TODO I guess a try could be passed to the instance creator
               (eval-class-instance-vars (remaining-defs field-defs) class-list environment)))))
+
+; Dot operator, accesses a class attribute by searching the environment
+(define eval-dot
+  (lambda (instance attribute environment class-list)
+    (println environment)
+    (println class-list)
+    (println (lookup-in-env instance environment))
+    (println (lookup-in-frame 'A class-list))
+    0))
+    
                
 ; Class abstractions
 (define class-name cadr)
@@ -185,6 +195,8 @@
 (define closure-constructor
   (lambda (closure)
     (caddr (cdddr closure))))
+(define runtime-type car)
+(define instance-attrs cadr)
 
 ;--------------------------------------
 ; FUNCTION DEFINITION AND EXECUTION HANDLING
@@ -451,7 +463,7 @@
       ((eq? expr 'true) (value-cont #t))
       ((eq? expr 'false) (value-cont #f))
       ((eq? (operator expr) 'new) (value-cont (eval-constructor (operand1 expr) environment class-list))) 
-      ((eq? (operator expr) 'dot) (value-cont 0)) ; TODO find varible in class-list from instance runtime type -- this needs a new lookup function using class-list and instance closure
+      ((eq? (operator expr) 'dot) (value-cont (eval-dot (operand1 expr) (operand2 expr) environment class-list)))
       ((function-call? expr) (eval-function expr environment class-list value-cont throw))
       ((not (list? expr)) (value-cont (lookup expr environment))) ; TODO Needs to search env and then instance vars
       (else (eval-operator expr environment class-list value-cont throw)))))
