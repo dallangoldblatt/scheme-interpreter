@@ -586,10 +586,10 @@
   (lambda (var this environment class-list)
     ;TODO delete: and (not (eq? this 'novalue)) (exists-in-list? var (instance-vals this)))
     (cond
-      ((eq? var 'this) this)
+      ((or (eq? var 'this) (eq? var 'super)) this)
       ((exists? var environment) (lookup var environment))
       (else (get-instance-value var this class-list)))))
-
+    
 ; Create and return new instance of a class
 (define eval-constructor
   (lambda (class environment class-list)
@@ -598,16 +598,32 @@
 ; TODO is probably not the car
 (define get-runtime-type
   (lambda (variable this environment class-list)
-    (if (var-is-new? variable)
-        (operand1 variable)
-        (car (lookup-ref variable this environment class-list)))))
+    (cond
+      ((var-is-new? variable) (operand1 variable))
+      ((eq? variable 'super) (lookup-super this class-list))
+      (else (car (lookup-ref variable this environment class-list))))))
 
+; Looks up the super type of the current type
+(define lookup-super
+  (lambda (this class-list)
+    (cond
+      ((not (exists-in-list? (type-of this) (car class-list))) (error "Class could not be resovled to a type:" (type-of this)))
+      (else (get-super (get-value (indexof (type-of this) (car class-list)) (cadr class-list)) this)))))
+
+; Gets the super type from the class closure if it exists
+(define get-super
+  (lambda (closure this)
+    (if (not (eq? (supertype-in-closure closure) 'nosuper))
+        (supertype-in-closure closure)
+        (error "Class has no super type:" (type-of this)))))
+ 
 ; Looks up the value of a variable if it's not a new instance
 (define lookup-if-not-new
   (lambda (var environment class-list)
-    (if (var-is-new? var)
-        (eval-constructor (operand1 var) environment class-list)
-        (lookup var environment))))
+    (cond
+      ((var-is-new? var) (eval-constructor (operand1 var) environment class-list))
+      ((eq? var 'super) (lookup 'this environment))
+      (else (lookup var environment)))))
 
 ; Get the value returned by a function call
 ; TODO search in class methods before environment by handling dot
@@ -685,8 +701,9 @@
 (define operand2 caddr)
 (define operand3 cadddr)
 
+(define supertype-in-closure car)
 (define type-of-new cadr)
-
+(define type-of car)
 (define exists-operand2?
   (lambda (statement)
     (not (null? (cddr statement)))))
@@ -701,7 +718,9 @@
 
 (define var-is-new?
   (lambda (expr)
-    (eq? (car expr) 'new)))
+      (if (not (pair? expr))
+          #f
+          (eq? (car expr) 'new))))
 
 (define is-new?
   (lambda (expr)
@@ -833,6 +852,13 @@
   (lambda (n l)
     (cond
       ((zero? n) (unbox (car l)))
+      (else (get-value (- n 1) (cdr l))))))
+
+; Get regular (not boxed) values at a given index in a list
+(define get-regular-value
+  (lambda (n l)
+    (cond
+      ((zero? n) (car l))
       (else (get-value (- n 1) (cdr l))))))
 
 ; Adds a new variable/value binding pair into the environment.  Gives an error if the variable already exists in this frame.
