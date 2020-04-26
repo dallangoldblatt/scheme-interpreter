@@ -568,9 +568,18 @@
       ((eq? expr 'false) (value-cont #f))
       ((not (list? expr)) (value-cont (lookup-ref expr this environment class-list)))
       ((eq? (operator expr) 'new) (value-cont (eval-constructor (operand1 expr) environment class-list))) 
-      ((eq? (operator expr) 'dot) (value-cont (get-instance-value (operand2 expr) (lookup-ref (operand1 expr) this environment class-list) class-list)))
+      ((eq? (operator expr) 'dot) (value-cont (get-instance-value (operand2 expr) (get-instance expr this environment class-list) class-list)))
       ((function-call? expr) (eval-function expr this environment class-list value-cont throw))
       (else (eval-operator expr this environment class-list value-cont throw)))))
+
+; Returns the instance. Checks if the instance is new or not
+(define get-instance
+  (lambda (expr this environment class-list)
+    (if (is-new? (operand1 expr))
+        ; If it's a new object
+        (eval-constructor (type-of-new (operand1 expr)) environment class-list)
+        ; else look it up
+        (lookup-ref (operand1 expr) this environment class-list))))
 
 ; Search for a variable in the environment before the instance vars
 (define lookup-ref
@@ -589,7 +598,16 @@
 ; TODO is probably not the car
 (define get-runtime-type
   (lambda (variable this environment class-list)
-    (car (lookup-ref variable this environment class-list))))
+    (if (var-is-new? variable)
+        (operand1 variable)
+        (car (lookup-ref variable this environment class-list)))))
+
+; Looks up the value of a variable if it's not a new instance
+(define lookup-if-not-new
+  (lambda (var environment class-list)
+    (if (var-is-new? var)
+        (eval-constructor (operand1 var) environment class-list)
+        (lookup var environment))))
 
 ; Get the value returned by a function call
 ; TODO search in class methods before environment by handling dot
@@ -601,7 +619,7 @@
                         (operand2 (get-function-call-name statement))
                         (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
                        (get-function-actual-params statement)
-                       (lookup (dot-instance (operand1 statement)) environment)
+                       (lookup-if-not-new (dot-instance (operand1 statement)) environment class-list)
                        environment
                        class-list
                        (lambda (return-val) (value-cont return-val))
@@ -667,6 +685,8 @@
 (define operand2 caddr)
 (define operand3 cadddr)
 
+(define type-of-new cadr)
+
 (define exists-operand2?
   (lambda (statement)
     (not (null? (cddr statement)))))
@@ -678,6 +698,14 @@
 (define function-call?
   (lambda (expr)
     (and (list? expr) (eq? (operator expr) 'funcall))))
+
+(define var-is-new?
+  (lambda (expr)
+    (eq? (car expr) 'new)))
+
+(define is-new?
+  (lambda (expr)
+    (eq? (car expr) 'new)))
 
 (define missing-rightoperand?
   (lambda (term)
