@@ -37,6 +37,7 @@
         ;                 (lambda (v) v)
         ;                 (lambda (v) (error "Uncaught exception thrown:")))
         (interpret-statement-list (closure-main (lookup-in-class-list main-class class-list))
+                                  main-class
                                   'novalue
                                   (newenvironment)
                                   class-list
@@ -182,28 +183,29 @@
   (lambda (class field-defs)
     (lambda (environment class-list)
       (list class
-            (reverse (eval-class-instance-vars field-defs class-list environment))))))
+            (reverse (eval-class-instance-vars class field-defs class-list environment))))))
 
 ; Evaluates the instance variables for a new instantiation of a class
 ; Returns every value together in a list
 (define eval-class-instance-vars
-  (lambda (field-defs class-list environment)
+  (lambda (type field-defs class-list environment)
     (if (null? field-defs)
         '()
         (cons (box (eval-expression (first-def field-defs)
+                                    type
                                     'novalue ; TODO the current value of this could be built as this iterates
                                     environment
                                     class-list
                                     (lambda (v) v)
                                     (lambda (v) (error "Exception in init:")))) ; TODO I guess a try could be passed to the instance creator
-              (eval-class-instance-vars (remaining-defs field-defs) class-list environment)))))
+              (eval-class-instance-vars type (remaining-defs field-defs) class-list environment)))))
 
 ; Returns the current value of an instance variable given the class list
 (define get-instance-value
-  (lambda (var instance class-list)
+  (lambda (var type instance class-list)
     (get-instance-value-from-list var
                                   (instance-vals instance)
-                                  (closure-field-names (lookup-in-class-list (instance-type instance) class-list)))))
+                                  (closure-field-names (lookup-in-class-list type class-list)))))
 
 ; Returns the current value of an instance variable given its class's var list
 ; Note that the val-list and var-list are paired in opposite order
@@ -218,23 +220,23 @@
 
 ; Creates a new instance closure with the a updated variable value
 (define set-instance-value
-  (lambda (var val instance class-list)
+  (lambda (var val type instance class-list)
     ; Check if the dot has been fully resolved
     (if (dot-resolved? var)
         ; Update the value in this instance
         (list (instance-type instance)
               (set-instance-value-at-index val
                                            (indexof-instance var
-                                                             (closure-field-names (lookup-in-class-list (instance-type instance) class-list)))
+                                                             (closure-field-names (lookup-in-class-list type class-list)))
                                            (instance-vals instance)))
         ; Recusively call on the nested instance
         (list (instance-type instance)
               (set-instance-value-at-index (set-instance-value (dot-var var)
                                                                val
-                                                               (get-instance-value (dot-var) instance class-list)
+                                                               (get-instance-value (dot-var) type instance class-list)
                                                                class-list)
                                            (indexof-instance var
-                                                             (closure-field-names (lookup-in-class-list (instance-type instance) class-list)))
+                                                             (closure-field-names (lookup-in-class-list type class-list)))
                                            (instance-vals instance))))))
 
 ; Sets the the value of a box at a partiular index
@@ -251,7 +253,11 @@
           (instance-vals instance))))
 
 ; Instance abstractions
-(define instance-type car)
+(define instance-type
+  (lambda (instance)
+    (if (eq? instance 'novalue)
+        instance
+        (car instance))))
 (define instance-vals cadr)
 (define dot-instance cadr)
 (define dot-var caddr)
@@ -318,8 +324,9 @@
 
 ; Create the correct environment from the closure, bind the parameters, call the body
 (define call-function
-  (lambda (closure actual-params this environment class-list return throw next)
+  (lambda (closure actual-params type this environment class-list return throw next)
     (interpret-statement-list (f-closure-body closure)
+                              type
                               this
                               (add-parameters
                                (f-closure-name closure)
@@ -355,7 +362,7 @@
                             (remaining-params actual-params)
                             (remaining-params formal-params)
                             call-environment
-                            (insert (first-param formal-params) (eval-expression (first-param actual-params) this call-environment class-list (lambda (v) v) throw) function-environment)
+                            (insert (first-param formal-params) (eval-expression (first-param actual-params) (instance-type this) this call-environment class-list (lambda (v) v) throw) function-environment)
                             this
                             class-list
                             throw)))))
@@ -388,10 +395,11 @@
 
 ; interprets a list of statements. The state/environment from each statement is used for the next ones.
 (define interpret-statement-list
-  (lambda (statement-list this environment class-list return break continue throw next)
+  (lambda (statement-list type this environment class-list return break continue throw next)
     (if (null? statement-list)
         (next environment)
         (interpret-statement (car statement-list)
+                             type
                              this
                              environment
                              class-list
@@ -399,35 +407,36 @@
                              break
                              continue
                              throw
-                             (lambda (env) (interpret-statement-list (cdr statement-list) this env class-list return break continue throw next))))))
+                             (lambda (env) (interpret-statement-list (cdr statement-list) type this env class-list return break continue throw next))))))
 
 ; interpret a statement in the environment with continuations for return, break, continue, throw, and "next statement"
 (define interpret-statement
-  (lambda (statement this environment class-list return break continue throw next)
+  (lambda (statement type this environment class-list return break continue throw next)
     (cond
       ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled in global compile
-      ((eq? 'funcall (statement-type statement))  (interpret-function statement this environment class-list next throw))
-      ((eq? 'return (statement-type statement))   (interpret-return statement this environment class-list return throw))
-      ((eq? 'var (statement-type statement))      (interpret-declare statement this environment class-list next throw))
-      ((eq? '= (statement-type statement))        (interpret-assign statement this environment class-list throw next))
-      ((eq? 'if (statement-type statement))       (interpret-if statement this environment class-list return break continue throw next))
-      ((eq? 'while (statement-type statement))    (interpret-while statement this environment class-list return throw next))
+      ((eq? 'funcall (statement-type statement))  (interpret-function statement type this environment class-list next throw))
+      ((eq? 'return (statement-type statement))   (interpret-return statement type this environment class-list return throw))
+      ((eq? 'var (statement-type statement))      (interpret-declare statement type this environment class-list next throw))
+      ((eq? '= (statement-type statement))        (interpret-assign statement type this environment class-list throw next))
+      ((eq? 'if (statement-type statement))       (interpret-if statement type this environment class-list return break continue throw next))
+      ((eq? 'while (statement-type statement))    (interpret-while statement type this environment class-list return throw next))
       ((eq? 'continue (statement-type statement)) (continue environment))
       ((eq? 'break (statement-type statement))    (break environment))
-      ((eq? 'begin (statement-type statement))    (interpret-block statement this environment class-list return break continue throw next))
-      ((eq? 'throw (statement-type statement))    (interpret-throw statement this environment class-list throw))
-      ((eq? 'try (statement-type statement))      (interpret-try statement this environment class-list return break continue throw next))
+      ((eq? 'begin (statement-type statement))    (interpret-block statement type this environment class-list return break continue throw next))
+      ((eq? 'throw (statement-type statement))    (interpret-throw statement type this environment class-list throw))
+      ((eq? 'try (statement-type statement))      (interpret-try statement type this environment class-list return break continue throw next))
       (else                                       (error "Unknown statement:" (statement-type statement))))))
 
 ; Calls a function and ignores the return value (since this function is being called outside of an assignment)
 (define interpret-function
-  (lambda (statement this environment class-list next throw)
+  (lambda (statement type this environment class-list next throw)
     (cond
       ((super-call? statement)
        (call-function (lookup-in-closure-list
                        (operand2 (get-function-call-name statement))
                        (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
                       (get-function-actual-params statement)
+                      type
                       this
                       environment
                       class-list
@@ -439,7 +448,8 @@
                         (operand2 (get-function-call-name statement))
                         (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
                        (get-function-actual-params statement)
-                       (lookup-ref (dot-instance (operand1 statement)) this environment class-list)
+                       type
+                       (lookup-ref (dot-instance (operand1 statement)) type this environment class-list)
                        environment
                        class-list
                        (lambda (return-val) (next environment))
@@ -447,6 +457,7 @@
                        (lambda (env) (next environment)))) ; Ignore the environment returned by the function call
         (call-function (lookup (get-function-call-name statement) environment)
                        (get-function-actual-params statement)
+                       type
                        this
                        environment
                        class-list
@@ -457,20 +468,21 @@
     
 ; Calls the return continuation with the given expression value
 (define interpret-return
-  (lambda (statement this environment class-list return throw)
-    (eval-expression (get-expr statement) this environment class-list (lambda (v) (return v)) throw)))
+  (lambda (statement type this environment class-list return throw)
+    (eval-expression (get-expr statement) type this environment class-list (lambda (v) (return v)) throw)))
 
 ; Adds a new variable binding to the environment. There may be an assignment with the variable
 (define interpret-declare
-  (lambda (statement this environment class-list next throw)
+  (lambda (statement type this environment class-list next throw)
     (if (exists-declare-value? statement)
-        (eval-expression (get-declare-value statement) this environment class-list (lambda (v) (next (insert (get-declare-var statement) v environment))) throw)
+        (eval-expression (get-declare-value statement) type this environment class-list (lambda (v) (next (insert (get-declare-var statement) v environment))) throw)
         (next (insert (get-declare-var statement) 'novalue environment)))))
 
 ; Updates the environment to add a new binding for a variable
 (define interpret-assign
-  (lambda (statement this environment class-list throw next)
+  (lambda (statement type this environment class-list throw next)
     (eval-expression (get-assign-rhs statement)
+                     type
                      this
                      environment
                      class-list
@@ -483,6 +495,7 @@
                            (next (update (leftmost-dot (get-assign-lhs statement))
                                          (set-instance-value (dot-var (get-assign-lhs statement))
                                                              v
+                                                             type
                                                              (lookup (leftmost-dot (get-assign-lhs statement)) environment)
                                                              class-list)
                                          environment)))
@@ -491,6 +504,7 @@
                           (next (update 'this
                                          (set-instance-value (get-assign-lhs statement)
                                                              v
+                                                             type
                                                              (lookup 'this environment)
                                                              class-list)
                                          environment)))
@@ -500,29 +514,32 @@
 
 ; We need to check if there is an else condition. Otherwise, we evaluate the expression and do the right thing.
 (define interpret-if
-  (lambda (statement this environment class-list return break continue throw next)
+  (lambda (statement type this environment class-list return break continue throw next)
     (eval-expression (get-condition statement)
+                     type
                      this
                      environment
                      class-list
                      (lambda (condition)
                        (cond
-                         (condition (interpret-statement (get-then statement) this environment class-list return break continue throw next))
-                         ((exists-else? statement) (interpret-statement (get-else statement) this environment class-list return break continue throw next))
+                         (condition (interpret-statement (get-then statement) type this environment class-list return break continue throw next))
+                         ((exists-else? statement) (interpret-statement (get-else statement) type this environment class-list return break continue throw next))
                          (else (next environment))))
                      throw)))
 
 ; Interprets a while loop. We must create break and continue continuations for this loop
 (define interpret-while
-  (lambda (statement this environment class-list return throw next)
+  (lambda (statement type this environment class-list return throw next)
     (letrec ((loop (lambda (condition body environment)
                      (eval-expression condition
+                                      type
                                       this
                                       environment
                                       class-list
                                       (lambda (condition-v)
                                         (if condition-v
                                             (interpret-statement body
+                                                                 type
                                                                  this
                                                                  environment
                                                                  class-list
@@ -537,8 +554,9 @@
 
 ; Interprets a block. The break, continue, and "next statement" continuations must be adjusted to pop the environment
 (define interpret-block
-  (lambda (statement this environment class-list return break continue throw next)
+  (lambda (statement type this environment class-list return break continue throw next)
     (interpret-statement-list (cdr statement)
+                              type
                               this
                               (push-frame environment)
                               class-list
@@ -551,21 +569,22 @@
 
 ; We use a continuation to throw the proper value.  Because we are using boxes, the environment does not need to be thrown as well
 (define interpret-throw
-  (lambda (statement this environment class-list throw)
-    (eval-expression (get-expr statement) this environment class-list (lambda (v) (throw v)) environment)))
+  (lambda (statement type this environment class-list throw)
+    (eval-expression (get-expr statement) type this environment class-list (lambda (v) (throw v)) environment)))
 
 ; Interpret a try-catch-finally block
 
 ; Create a continuation for the throw.  If there is no catch, it has to interpret the finally block, and once that completes throw the exception.
 ;   Otherwise, it interprets the catch block with the exception bound to the thrown value and interprets the finally block when the catch is done
 (define create-throw-catch-continuation
-  (lambda (catch-statement this environment class-list return break continue throw next finally-block)
+  (lambda (catch-statement type this environment class-list return break continue throw next finally-block)
     (cond
-      ((null? catch-statement) (lambda (ex env) (interpret-block finally-block this env class-list return break continue throw (lambda (env2) (throw ex))))) 
+      ((null? catch-statement) (lambda (ex env) (interpret-block finally-block type this env class-list return break continue throw (lambda (env2) (throw ex))))) 
       ((not (eq? 'catch (statement-type catch-statement))) (error "Incorrect catch statement"))
       (else (lambda (ex)
               (interpret-statement-list 
                (get-body catch-statement)
+               type
                this
                (insert (catch-var catch-statement) ex (push-frame environment))
                class-list
@@ -578,14 +597,14 @@
 ; To interpret a try block, we must adjust the return, break, continue continuations to interpret the finally block if any of them are used.
 ;  We must create a new throw continuation and then interpret the try block with the new continuations followed by the finally block with the old continuations
 (define interpret-try
-  (lambda (statement this environment class-list return break continue throw next)
+  (lambda (statement type this environment class-list return break continue throw next)
     (let* ((finally-block (make-finally-block (get-finally statement)))
            (try-block (make-try-block (get-try statement)))
-           (new-return (lambda (v) (interpret-block finally-block this environment class-list return break continue throw (lambda (env2) (return v)))))
-           (new-break (lambda (env) (interpret-block finally-block this env class-list return break continue throw (lambda (env2) (break env2)))))
-           (new-continue (lambda (env) (interpret-block finally-block this env class-list return break continue throw (lambda (env2) (continue env2)))))
-           (new-throw (create-throw-catch-continuation (get-catch statement) this environment class-list return break continue throw next finally-block)))
-      (interpret-block try-block this environment class-list new-return new-break new-continue new-throw (lambda (env) (interpret-block finally-block this env class-list return break continue throw next))))))
+           (new-return (lambda (v) (interpret-block finally-block type this environment class-list return break continue throw (lambda (env2) (return v)))))
+           (new-break (lambda (env) (interpret-block finally-block type this env class-list return break continue throw (lambda (env2) (break env2)))))
+           (new-continue (lambda (env) (interpret-block finally-block type this env class-list return break continue throw (lambda (env2) (continue env2)))))
+           (new-throw (create-throw-catch-continuation (get-catch statement) type this environment class-list return break continue throw next finally-block)))
+      (interpret-block try-block type this environment class-list new-return new-break new-continue new-throw (lambda (env) (interpret-block finally-block type this env class-list return break continue throw next))))))
 
 ; helper methods so that I can reuse the interpret-block method on the try and finally blocks
 (define make-try-block
@@ -601,17 +620,17 @@
 
 ; Evaluates all possible boolean and arithmetic expressions, including constants and variables.
 (define eval-expression
-  (lambda (expr this environment class-list value-cont throw)
+  (lambda (expr type this environment class-list value-cont throw)
     (cond
       ((number? expr) (value-cont expr))
       ((eq? expr 'novalue) (value-cont 'novalue))
       ((eq? expr 'true) (value-cont #t))
       ((eq? expr 'false) (value-cont #f))
-      ((not (list? expr)) (value-cont (lookup-ref expr this environment class-list)))
+      ((not (list? expr)) (value-cont (lookup-ref expr type this environment class-list)))
       ((eq? (operator expr) 'new) (value-cont (eval-constructor (operand1 expr) environment class-list))) 
-      ((eq? (operator expr) 'dot) (value-cont (get-instance-value (operand2 expr) (get-instance expr this environment class-list) class-list)))
-      ((function-call? expr) (eval-function expr this environment class-list value-cont throw))
-      (else (eval-operator expr this environment class-list value-cont throw)))))
+      ((eq? (operator expr) 'dot) (value-cont (get-instance-value (operand2 expr) type (get-instance expr this environment class-list) class-list)))
+      ((function-call? expr) (eval-function expr type this environment class-list value-cont throw))
+      (else (eval-operator expr type this environment class-list value-cont throw)))))
 
 ; Returns the instance. Checks if the instance is new or not
 (define get-instance
@@ -620,16 +639,16 @@
         ; If it's a new object
         (eval-constructor (type-of-new (operand1 expr)) environment class-list)
         ; else look it up
-        (lookup-ref (operand1 expr) this environment class-list))))
+        (lookup-ref (operand1 expr) (instance-type this) this environment class-list))))
 
 ; Search for a variable in the environment before the instance vars
 (define lookup-ref
-  (lambda (var this environment class-list)
+  (lambda (var type this environment class-list)
     (cond
       ((eq? var 'super) (get-super-instance (lookup 'this environment) class-list))
       ((eq? var 'this) (lookup 'this environment))
       ((exists? var environment) (lookup var environment))
-      (else (get-instance-value var (lookup 'this environment) class-list)))))
+      (else (get-instance-value var type (lookup 'this environment) class-list)))))
     
 ; Create and return new instance of a class
 (define eval-constructor
@@ -642,7 +661,7 @@
     (cond
       ((var-is-new? variable) (operand1 variable))
       ((eq? variable 'super) (lookup-super this class-list))
-      (else (car (lookup-ref variable this environment class-list))))))
+      (else (car (lookup-ref variable (instance-type this) this environment class-list))))))
 
 ; Looks up the super type of the current type
 (define lookup-super
@@ -670,13 +689,16 @@
 ; TODO search in class methods before environment by handling dot
 ;      the environment only holds nested functions
 (define eval-function
-  (lambda (statement this environment class-list value-cont throw)
+  (lambda (statement type this environment class-list value-cont throw)
     (cond
       ((super-call? statement)
        (call-function (lookup-in-closure-list
                        (operand2 (get-function-call-name statement))
                        (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
                       (get-function-actual-params statement)
+                      (f-closure-class (lookup-in-closure-list
+                       (operand2 (get-function-call-name statement))
+                       (closure-methods (lookup-in-class-list (lookup 'super environment) class-list))))
                       this
                       environment
                       class-list
@@ -688,6 +710,9 @@
                        (operand2 (get-function-call-name statement))
                        (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
                       (get-function-actual-params statement)
+                      (f-closure-class (lookup-in-closure-list
+                       (operand2 (get-function-call-name statement))
+                       (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list))))
                       (lookup-if-not-new (dot-instance (operand1 statement)) environment class-list)
                       environment
                       class-list
@@ -696,6 +721,7 @@
                       (lambda (env) (value-cont 'novalue))))
       (call-function (lookup (get-function-call-name statement) environment)
                      (get-function-actual-params statement)
+                     type
                      this
                      environment
                      class-list
@@ -706,16 +732,17 @@
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.
 (define eval-operator
-  (lambda (expr this environment class-list value-cont throw)
+  (lambda (expr type this environment class-list value-cont throw)
     (cond
-      ((eq? '! (operator expr)) (eval-expression (operand1 expr) this environment class-list (lambda (v) (value-cont (not v))) throw))
-      ((negation? expr) (eval-expression (operand1 expr) this environment class-list (lambda (v) (value-cont (* -1 v))) throw))
-      (else (eval-expression (operand1 expr) this environment class-list (lambda (v1) (eval-binary-op2 expr v1 this environment class-list value-cont throw)) throw)))))
+      ((eq? '! (operator expr)) (eval-expression (operand1 expr) type this environment class-list (lambda (v) (value-cont (not v))) throw))
+      ((negation? expr) (eval-expression (operand1 expr) type this environment class-list (lambda (v) (value-cont (* -1 v))) throw))
+      (else (eval-expression (operand1 expr) type this environment class-list (lambda (v1) (eval-binary-op2 expr v1 type this environment class-list value-cont throw)) throw)))))
 
 ; Complete the evaluation of the binary operator by evaluating the second operand and performing the operation.
 (define eval-binary-op2
-  (lambda (expr v1 this environment class-list value-cont throw)
+  (lambda (expr v1 type this environment class-list value-cont throw)
     (eval-expression (operand2 expr)
+                     type
                      this
                      environment
                      class-list
