@@ -455,7 +455,9 @@
                        (lambda (return-val) (next environment))
                        throw
                        (lambda (env) (next environment)))) ; Ignore the environment returned by the function call
-        (call-function (lookup (get-function-call-name statement) environment)
+        (call-function (lookup-in-closure-list
+                        (get-function-call-name statement)
+                        (closure-methods (lookup-in-class-list type)))
                        (get-function-actual-params statement)
                        type
                        this
@@ -719,7 +721,9 @@
                       (lambda (return-val) (value-cont return-val))
                       throw
                       (lambda (env) (value-cont 'novalue))))
-      (call-function (lookup (get-function-call-name statement) environment)
+      (call-function (lookup-in-closure-list
+                      (get-function-call-name statement)
+                      (closure-methods (lookup-in-class-list type class-list)))
                      (get-function-actual-params statement)
                      type
                      this
