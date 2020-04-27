@@ -630,9 +630,17 @@
       ((eq? expr 'false) (value-cont #f))
       ((not (list? expr)) (value-cont (lookup-ref expr current-type this environment class-list)))
       ((eq? (operator expr) 'new) (value-cont (eval-constructor (operand1 expr) environment class-list))) 
-      ((eq? (operator expr) 'dot) (value-cont (get-instance-value (operand2 expr) current-type (get-instance expr this environment class-list) class-list)))
+      ((eq? (operator expr) 'dot) (eval-dot (operand1 expr) (operand2 expr) current-type this environment class-list value-cont throw))
       ((function-call? expr) (eval-function expr current-type this environment class-list value-cont throw))
       (else (eval-operator expr current-type this environment class-list value-cont throw)))))
+
+; Handles the dot operator
+(define eval-dot
+  (lambda (dot-lhs dot-rhs current-type this environment class-list value-cont throw)
+    (eval-expression dot-lhs current-type this environment class-list
+                     (lambda (instance)
+                       (value-cont (get-instance-value dot-rhs current-type instance class-list)))
+                     throw)))
 
 ; Returns the instance. Checks if the instance is new or not
 (define get-instance
@@ -733,6 +741,13 @@
                       (lambda (return-val) (value-cont return-val))
                       throw
                       (lambda (env) (value-cont 'novalue)))))))
+
+; TODO finish this - above, if we see a list as the first arg in the statement,
+; we need to resolve the lhs to an instance and then return both the instance and the function name to above
+;
+;(define get-call-instance-and-name
+;  (lambda statement type this environment class-list return
+;    (eval-dot (dot-lhs dot-rhs current-type this environment class-list value-cont throw))))
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.
