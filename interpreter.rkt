@@ -466,8 +466,7 @@
                      (lambda (return-val) (next environment))
                      throw
                      (lambda (env) (next environment)))))) ; Ignore the environment returned by the function call
-        
-    
+
 ; Calls the return continuation with the given expression value
 (define interpret-return
   (lambda (statement current-type this environment class-list return throw)
@@ -742,12 +741,15 @@
                       throw
                       (lambda (env) (value-cont 'novalue)))))))
 
-; TODO finish this - above, if we see a list as the first arg in the statement,
-; we need to resolve the lhs to an instance and then return both the instance and the function name to above
+; TODO adapt above to correctly use this
+; it returns the instance from the lhs of the dot and the function name from the rhs
 ;
-;(define get-call-instance-and-name
-;  (lambda statement type this environment class-list return
-;    (eval-dot (dot-lhs dot-rhs current-type this environment class-list value-cont throw))))
+(define get-call-instance-and-name
+  (lambda (call current-type this environment class-list throw return)
+    (eval-expression (operand1 call) current-type this environment class-list
+                     (lambda (instance)
+                       (return instance (operand2 call)))
+                     throw)))
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.
