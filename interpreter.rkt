@@ -53,11 +53,13 @@
     (cond
       ((extends-class? declaration)              (next (add-to-frame (class-name declaration)
                                                                      (create-class-closure declaration
+                                                                                           (class-name declaration)
                                                                                            (super-class declaration)
                                                                                            (lookup-in-class-list (super-class declaration) class-list))
                                                                      class-list)))
       ((eq? 'class (statement-type declaration)) (next (add-to-frame (class-name declaration)
                                                                      (create-class-closure declaration
+                                                                                           (class-name declaration)
                                                                                            '_nosuper
                                                                                            '())
                                                                      class-list)))
@@ -66,11 +68,12 @@
 ; TODO make this prettier? It does nearly the same thing in both cases
 ; Create the closure for a class from its definition
 (define create-class-closure
-  (lambda (declaration super-name super-closure)
+  (lambda (declaration function-class super-name super-closure)
     (if (null? super-closure)
         ; No super class, do not need to get super variables or methods 
         (compile-class-definition
          (class-body declaration)
+         function-class
          '()
          '() ; This function uses a custom return function with multiple values
          '() ; so empty lists have to be supplied for the recursion
@@ -85,6 +88,7 @@
         ; Get the variables and methods from super closure
         (compile-class-definition
          (class-body declaration)
+         function-class
          (closure-field-names super-closure)
          (closure-field-defs super-closure)
          (closure-methods super-closure)
@@ -100,24 +104,25 @@
 ; Compiles class methods and variables and returns them in lists
 ; The only static function that is handled is main()
 (define compile-class-definition
-  (lambda (statement-list var-list val-list method-list main return)
+  (lambda (statement-list function-class var-list val-list method-list main return)
     (if (null? statement-list)
         (return var-list val-list method-list main)
         (compile-statement (first-statement statement-list)
+                           function-class
                            var-list
                            val-list
                            method-list
                            main
-                           (lambda (va vl ml ma) (compile-class-definition (remaining-statements statement-list) va vl ml ma return))))))
+                           (lambda (va vl ml ma) (compile-class-definition (remaining-statements statement-list) function-class va vl ml ma return))))))
 
 ; Handle a single statement inside a class definition
 (define compile-statement
-  (lambda (statement var-list val-list method-list main return)
+  (lambda (statement function-class var-list val-list method-list main return)
     (cond
       ; The only static method is the main method
       ((eq? 'static-function (statement-type statement)) (return var-list val-list method-list (function-body statement)))
       ; Create the function closure for a method, the environment should be top-level for the instance TODO maybe even empty?
-      ((eq? 'function (statement-type statement)) (return var-list val-list (cons (create-function-closure statement (newenvironment)) method-list) main))
+      ((eq? 'function (statement-type statement)) (return var-list val-list (cons (create-function-closure statement (newenvironment) function-class) method-list) main))
       ; Add the variable and value to the variable list, the value is not evaluated until instantiation
       ((eq? 'var (statement-type statement)) (get-var-and-value statement (lambda (var val) (return (cons var var-list) (cons val val-list) method-list main))))
       ; Overloaded constructors not supported
@@ -158,7 +163,7 @@
 (define closure-main
   (lambda (closure)
     (if (null? (cadr (cdddr closure)))
-        (error "Cannot call missing main method")
+        (error "Cannot call missing static main method")
         (cadr (cdddr closure)))))
 (define closure-constructor
   (lambda (closure)
@@ -239,6 +244,12 @@
       ((zero? i) (cons (begin (set-box! (car val-list) val) (car val-list)) (cdr val-list)))
       (else (cons (car val-list) (set-instance-value-at-index val (- i 1) (cdr val-list)))))))
 
+; Creates a shallow copy of the passed instance for easier "super" references
+(define get-super-instance
+  (lambda (instance class-list)
+    (list (closure-super (lookup-in-class-list (instance-type instance) class-list))
+          (instance-vals instance))))
+
 ; Instance abstractions
 (define instance-type car)
 (define instance-vals cadr)
@@ -257,16 +268,17 @@
 ; FUNCTION DEFINITION AND EXECUTION HANDLING
 ;--------------------------------------
 ; formats:
-; function:    (function name (params) ((body)
-; f closure:   (name (params) ((body)) (state-function)
+; function:    (function name (params) ((body)))
+; f closure:   (name (params) ((body)) (state-function) function-class)
 
 ; Creates the closure for a newly defined function
 (define create-function-closure
-  (lambda (function environment)
+  (lambda (function environment function-class)
     (list (function-name function)
           (function-params function)
           (function-body function)
-          (create-environment-builder function environment))))
+          (create-environment-builder function environment)
+          function-class)))
 
 ; Creates a the environment-building function for the closure
 (define create-environment-builder
@@ -283,7 +295,7 @@
         environment
         (add-functions-to-environment
          (remaining-functions function-list)
-         (insert (closure-name (first-function function-list)) (first-function function-list) environment)))))
+         (insert (f-closure-name (first-function function-list)) (first-function function-list) environment)))))
 
 ; Read a function body and recursively create their closures
 ; Add these definions to the parent function's closure
@@ -307,14 +319,14 @@
 ; Create the correct environment from the closure, bind the parameters, call the body
 (define call-function
   (lambda (closure actual-params this environment class-list return throw next)
-    (interpret-statement-list (closure-body closure)
+    (interpret-statement-list (f-closure-body closure)
                               this
                               (add-parameters
-                               (closure-name closure)
-                               (cons this actual-params)
-                               (cons 'this (closure-formal-params closure))
+                               (f-closure-name closure)
+                               (cons (closure-super (lookup-in-class-list (f-closure-class closure) class-list)) (cons this actual-params))
+                               (cons 'super (cons 'this (f-closure-formal-params closure)))
                                environment
-                               ((closure-environment-builder closure) environment)
+                               ((f-closure-environment-builder closure) environment)
                                this
                                class-list
                                throw)
@@ -331,14 +343,14 @@
     (cond
       ((and (null? actual-params) (null? formal-params)) function-environment)
       ((or (null? actual-params) (null? formal-params)) (error "The actual parameters do not match the formal parameters for:" function-name))
-      ((eq? (first-param formal-params) 'this) (add-parameters function-name
-                                                               (remaining-params actual-params)
-                                                               (remaining-params formal-params)
-                                                               call-environment
-                                                               (insert (first-param formal-params) (first-param actual-params) function-environment)
-                                                               this
-                                                               class-list
-                                                               throw))
+      ((this-or-super? (first-param formal-params)) (add-parameters function-name
+                                                                    (remaining-params actual-params)
+                                                                    (remaining-params formal-params)
+                                                                    call-environment
+                                                                    (insert (first-param formal-params) (first-param actual-params) function-environment)
+                                                                    this
+                                                                    class-list
+                                                                    throw))
       (else (add-parameters function-name
                             (remaining-params actual-params)
                             (remaining-params formal-params)
@@ -347,15 +359,21 @@
                             this
                             class-list
                             throw)))))
+
+(define this-or-super?
+  (lambda (param)
+    (or (eq? param 'this) (eq? param 'super))))
                                
 ; Function closure abstractions
 (define function-name cadr)
 (define function-params caddr)
 (define function-body cadddr)
-(define closure-name car)
-(define closure-formal-params cadr)
-(define closure-body caddr)
-(define closure-environment-builder cadddr)
+(define f-closure-name car)
+(define f-closure-formal-params cadr)
+(define f-closure-body caddr)
+(define f-closure-environment-builder cadddr)
+(define f-closure-class
+  (lambda (c) (cadr (cdddr c))))
 (define first-statement car)
 (define remaining-statements cdr)
 (define first-function car)
@@ -404,17 +422,29 @@
 ; Calls a function and ignores the return value (since this function is being called outside of an assignment)
 (define interpret-function
   (lambda (statement this environment class-list next throw)
-    (if (list? (get-function-call-name statement))
+    (cond
+      ((super-call? statement)
+       (call-function (lookup-in-closure-list
+                       (operand2 (get-function-call-name statement))
+                       (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
+                      (get-function-actual-params statement)
+                      this
+                      environment
+                      class-list
+                      (lambda (return-val) (next environment))
+                      throw
+                      (lambda (env) (next environment))))
+      ((list? (get-function-call-name statement))
         (call-function (lookup-in-closure-list
                         (operand2 (get-function-call-name statement))
                         (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
                        (get-function-actual-params statement)
-                       (lookup (dot-instance (operand1 statement)) environment)
+                       (lookup-ref (dot-instance (operand1 statement)) this environment class-list)
                        environment
                        class-list
                        (lambda (return-val) (next environment))
                        throw
-                       (lambda (env) (next environment))) ; Ignore the environment returned by the function call
+                       (lambda (env) (next environment)))) ; Ignore the environment returned by the function call
         (call-function (lookup (get-function-call-name statement) environment)
                        (get-function-actual-params statement)
                        this
@@ -447,15 +477,25 @@
                      (lambda (v)
                        ; Check to see if the assignment is to an instance var
                        ; TODO check for 'this in and then these two
-                       (if (list? (get-assign-lhs statement))
+                       (cond
+                         ((list? (get-assign-lhs statement))
                            ; Update the instance box in the environment
                            (next (update (leftmost-dot (get-assign-lhs statement))
                                          (set-instance-value (dot-var (get-assign-lhs statement))
                                                              v
                                                              (lookup (leftmost-dot (get-assign-lhs statement)) environment)
                                                              class-list)
-                                         environment))
-                           (next (update (get-assign-lhs statement) v environment))))
+                                         environment)))
+                         ((not (exists? (get-assign-lhs statement) environment))
+                          ; Update the instance variable for 'this'
+                          (next (update 'this
+                                         (set-instance-value (get-assign-lhs statement)
+                                                             v
+                                                             (lookup 'this environment)
+                                                             class-list)
+                                         environment)))
+                         ; Update the variable in the environment
+                         (else (next (update (get-assign-lhs statement) v environment)))))
                      throw)))
 
 ; We need to check if there is an else condition. Otherwise, we evaluate the expression and do the right thing.
@@ -564,6 +604,7 @@
   (lambda (expr this environment class-list value-cont throw)
     (cond
       ((number? expr) (value-cont expr))
+      ((eq? expr 'novalue) (value-cont 'novalue))
       ((eq? expr 'true) (value-cont #t))
       ((eq? expr 'false) (value-cont #f))
       ((not (list? expr)) (value-cont (lookup-ref expr this environment class-list)))
@@ -584,11 +625,11 @@
 ; Search for a variable in the environment before the instance vars
 (define lookup-ref
   (lambda (var this environment class-list)
-    ;TODO delete: and (not (eq? this 'novalue)) (exists-in-list? var (instance-vals this)))
     (cond
-      ((or (eq? var 'this) (eq? var 'super)) this)
+      ((eq? var 'super) (get-super-instance (lookup 'this environment) class-list))
+      ((eq? var 'this) (lookup 'this environment))
       ((exists? var environment) (lookup var environment))
-      (else (get-instance-value var this class-list)))))
+      (else (get-instance-value var (lookup 'this environment) class-list)))))
     
 ; Create and return new instance of a class
 (define eval-constructor
@@ -630,25 +671,37 @@
 ;      the environment only holds nested functions
 (define eval-function
   (lambda (statement this environment class-list value-cont throw)
-    (if (list? (get-function-call-name statement))
-        (call-function (lookup-in-closure-list
-                        (operand2 (get-function-call-name statement))
-                        (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
-                       (get-function-actual-params statement)
-                       (lookup-if-not-new (dot-instance (operand1 statement)) environment class-list)
-                       environment
-                       class-list
-                       (lambda (return-val) (value-cont return-val))
-                       throw
-                       (lambda (env) (value-cont 'novalue)))
-        (call-function (lookup (get-function-call-name statement) environment)
-                       (get-function-actual-params statement)
-                       this
-                       environment
-                       class-list
-                       (lambda (return-val) (value-cont return-val))
-                       throw
-                       (lambda (env) (value-cont 'novalue))))))
+    (cond
+      ((super-call? statement)
+       (call-function (lookup-in-closure-list
+                       (operand2 (get-function-call-name statement))
+                       (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
+                      (get-function-actual-params statement)
+                      this
+                      environment
+                      class-list
+                      (lambda (return-val) (value-cont return-val))
+                      throw
+                      (lambda (env) (value-cont 'novalue))))
+      ((list? (get-function-call-name statement))
+       (call-function (lookup-in-closure-list
+                       (operand2 (get-function-call-name statement))
+                       (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
+                      (get-function-actual-params statement)
+                      (lookup-if-not-new (dot-instance (operand1 statement)) environment class-list)
+                      environment
+                      class-list
+                      (lambda (return-val) (value-cont return-val))
+                      throw
+                      (lambda (env) (value-cont 'novalue))))
+      (call-function (lookup (get-function-call-name statement) environment)
+                     (get-function-actual-params statement)
+                     this
+                     environment
+                     class-list
+                     (lambda (return-val) (value-cont return-val))
+                     throw
+                     (lambda (env) (value-cont 'novalue))))))
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.
@@ -718,17 +771,22 @@
 
 (define var-is-new?
   (lambda (expr)
-      (if (not (pair? expr))
-          #f
-          (eq? (car expr) 'new))))
+    (if (not (pair? expr))
+        #f
+        (eq? (car expr) 'new))))
 
 (define is-new?
   (lambda (expr)
-    (eq? (car expr) 'new)))
+    (and (list? expr) (eq? (car expr) 'new))))
 
 (define missing-rightoperand?
   (lambda (term)
     (null? (cddr term))))
+
+(define super-call?
+  (lambda (statement)
+    (and (and (list? statement) (list? (cadr statement)))
+         (eq? 'super (operand1 (cadr statement))))))
 
 ; Check if a "-" operator refers to subtraction or negation
 (define negation?
