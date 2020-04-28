@@ -436,7 +436,9 @@
                        (operand2 (get-function-call-name statement))
                        (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
                       (get-function-actual-params statement)
-                      current-type
+                      (f-closure-class (lookup-in-closure-list
+                                        (operand2 (get-function-call-name statement))
+                                        (closure-methods (lookup-in-class-list (lookup 'super environment) class-list))))
                       this
                       environment
                       class-list
@@ -444,28 +446,33 @@
                       throw
                       (lambda (env) (next environment))))
       ((list? (get-function-call-name statement))
+       (get-call-instance-and-name (get-function-call-name statement) current-type this environment class-list throw
+                                   (lambda (instance name)
+                                     (call-function (lookup-in-closure-list
+                                                     name
+                                                     (closure-methods (lookup-in-class-list (instance-type instance) class-list)))
+                                                    (get-function-actual-params statement)
+                                                    (f-closure-class (lookup-in-closure-list
+                                                                      name
+                                                                      (closure-methods (lookup-in-class-list (instance-type instance) class-list))))
+                                                    instance
+                                                    environment
+                                                    class-list
+                                                    (lambda (return-val) (next environment))
+                                                    throw
+                                                    (lambda (env) (next environment))))))
+      (else
        (call-function (lookup-in-closure-list
-                       (operand2 (get-function-call-name statement))
-                       (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
+                       (get-function-call-name statement)
+                       (closure-methods (lookup-in-class-list (instance-type (lookup 'this environment)) class-list)))
                       (get-function-actual-params statement)
                       current-type
-                      (lookup-ref (dot-instance (operand1 statement)) current-type this environment class-list)
+                      this
                       environment
                       class-list
                       (lambda (return-val) (next environment))
                       throw
-                      (lambda (env) (next environment)))) ; Ignore the environment returned by the function call
-      (call-function (lookup-in-closure-list
-                      (get-function-call-name statement)
-                      (closure-methods (lookup-in-class-list (instance-type (lookup 'this environment)) class-list)))
-                     (get-function-actual-params statement)
-                     current-type
-                     this
-                     environment
-                     class-list
-                     (lambda (return-val) (next environment))
-                     throw
-                     (lambda (env) (next environment)))))) ; Ignore the environment returned by the function call
+                      (lambda (env) (next environment)))))))
 
 ; Calls the return continuation with the given expression value
 (define interpret-return
@@ -698,7 +705,7 @@
 ; TODO search in class methods before environment by handling dot
 ;      the environment only holds nested functions
 (define eval-function
-  (lambda (statement type this environment class-list value-cont throw)
+  (lambda (statement current-type this environment class-list value-cont throw)
     (cond
       ((super-call? statement)
        (call-function (lookup-in-closure-list
@@ -715,25 +722,27 @@
                       throw
                       (lambda (env) (value-cont 'novalue))))
       ((list? (get-function-call-name statement))
-       (call-function (lookup-in-closure-list
-                       (operand2 (get-function-call-name statement))
-                       (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list)))
-                      (get-function-actual-params statement)
-                      (f-closure-class (lookup-in-closure-list
-                                        (operand2 (get-function-call-name statement))
-                                        (closure-methods (lookup-in-class-list (get-runtime-type (operand1 (get-function-call-name statement)) this environment class-list) class-list))))
-                      (lookup-if-not-new (dot-instance (operand1 statement)) environment class-list)
-                      environment
-                      class-list
-                      (lambda (return-val) (value-cont return-val))
-                      throw
-                      (lambda (env) (value-cont 'novalue))))
+       (get-call-instance-and-name (get-function-call-name statement) current-type this environment class-list throw
+                                   (lambda (instance name)
+                                     (call-function (lookup-in-closure-list
+                                                     name
+                                                     (closure-methods (lookup-in-class-list (instance-type instance) class-list)))
+                                                    (get-function-actual-params statement)
+                                                    (f-closure-class (lookup-in-closure-list
+                                                                      name
+                                                                      (closure-methods (lookup-in-class-list (instance-type instance) class-list))))
+                                                    instance
+                                                    environment
+                                                    class-list
+                                                    (lambda (return-val) (value-cont return-val))
+                                                    throw
+                                                    (lambda (env) (value-cont 'novalue))))))
       (else
        (call-function (lookup-in-closure-list
                        (get-function-call-name statement)
                        (closure-methods (lookup-in-class-list (instance-type (lookup 'this environment)) class-list)))
                       (get-function-actual-params statement)
-                      type
+                      current-type
                       this
                       environment
                       class-list
@@ -741,7 +750,7 @@
                       throw
                       (lambda (env) (value-cont 'novalue)))))))
 
-; TODO adapt above to correctly use this
+; TODO this: adapt above to correctly use this
 ; it returns the instance from the lhs of the dot and the function name from the rhs
 ;
 (define get-call-instance-and-name
