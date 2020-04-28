@@ -31,11 +31,6 @@
 (define compile
   (lambda (class-declarations class-list main-class)
     (if (null? class-declarations)
-        ;(eval-expression `(funcall (dot (new ,main-class) main))       ; TODO uncomment this and remove below when dot is working
-        ;                 (newenvironment)
-        ;                 class-list
-        ;                 (lambda (v) v)
-        ;                 (lambda (v) (error "Uncaught exception thrown:")))
         (interpret-statement-list (closure-main (lookup-in-class-list main-class class-list))
                                   main-class
                                   'novalue
@@ -66,7 +61,6 @@
                                                                      class-list)))
       (else                                      (error "Expected class declaration:" declaration)))))
 
-; TODO make this prettier? It does nearly the same thing in both cases
 ; Create the closure for a class from its definition
 (define create-class-closure
   (lambda (declaration function-class super-name super-closure)
@@ -122,7 +116,7 @@
     (cond
       ; The only static method is the main method
       ((eq? 'static-function (statement-type statement)) (return var-list val-list method-list (function-body statement)))
-      ; Create the function closure for a method, the environment should be top-level for the instance TODO maybe even empty?
+      ; Create the function closure for a method, the environment should be top-level for the instance 
       ((eq? 'function (statement-type statement)) (return var-list val-list (cons (create-function-closure statement (newenvironment) function-class) method-list) main))
       ; Add the variable and value to the variable list, the value is not evaluated until instantiation
       ((eq? 'var (statement-type statement)) (get-var-and-value statement (lambda (var val) (return (cons var var-list) (cons val val-list) method-list main))))
@@ -181,24 +175,24 @@
 ; Creates a default constructor that returns an instance of a class in a given environment
 (define create-default-constructor
   (lambda (class field-defs)
-    (lambda (environment class-list)
+    (lambda (environment class-list throw)
       (list class
-            (reverse (eval-class-instance-vars class field-defs class-list environment))))))
+            (reverse (eval-class-instance-vars class field-defs class-list environment throw))))))
 
 ; Evaluates the instance variables for a new instantiation of a class
 ; Returns every value together in a list
 (define eval-class-instance-vars
-  (lambda (type field-defs class-list environment)
+  (lambda (type field-defs class-list environment throw)
     (if (null? field-defs)
         '()
         (cons (box (eval-expression (first-def field-defs)
                                     type
-                                    'novalue ; TODO the current value of this could be built as this iterates
+                                    'novalue
                                     environment
                                     class-list
                                     (lambda (v) v)
-                                    (lambda (v) (error "Exception in init:")))) ; TODO I guess a try could be passed to the instance creator
-              (eval-class-instance-vars type (remaining-defs field-defs) class-list environment)))))
+                                    throw)) ; TODO I guess a try could be passed to the instance creator
+              (eval-class-instance-vars type (remaining-defs field-defs) class-list environment throw)))))
 
 ; Returns the current value of an instance variable given the class list
 (define get-instance-value
@@ -283,15 +277,15 @@
     (list (function-name function)
           (function-params function)
           (function-body function)
-          (create-environment-builder function environment)
+          (create-environment-builder function environment function-class)
           function-class)))
 
 ; Creates a the environment-building function for the closure
 (define create-environment-builder
-  (lambda (function function-def-environment)
+  (lambda (function function-def-environment function-class)
     (lambda (environment)
       (add-functions-to-environment ; Adds the closures of any nested functions to the built environment
-       (find-nested-function-definitions (function-body function) (push-frame environment) '())
+       (find-nested-function-definitions (function-body function) (push-frame environment) '() function-class)
        (push-frame (pop-n-frames (- (length environment) (length function-def-environment)) environment)))))) 
 
 ; Add a list of function closures to the top frame of the state
@@ -306,14 +300,14 @@
 ; Read a function body and recursively create their closures
 ; Add these definions to the parent function's closure
 (define find-nested-function-definitions
-  (lambda (body local-environment function-list)
+  (lambda (body local-environment function-list function-class)
     (cond
       ((null? body)                                            function-list)
       ((eq? 'function (statement-type (first-statement body))) (find-nested-function-definitions
                                                                 (remaining-statements body)
                                                                 local-environment
-                                                                (cons (create-function-closure (first-statement body) local-environment) function-list)))
-      (else                                                    (find-nested-function-definitions (remaining-statements body) local-environment function-list)))))
+                                                                (cons (create-function-closure (first-statement body) local-environment function-class) function-list)))
+      (else                                                    (find-nested-function-definitions (remaining-statements body) local-environment function-list function-class)))))
 
 ; Helper function for popping n frames off of the given environment
 (define pop-n-frames
@@ -343,6 +337,67 @@
                               (lambda (env) (error "Continue used outside of loop"))
                               throw
                               next)))
+
+; Handles setting the appropriate params for calling a function
+(define bind-continuations-and-call-function
+  (lambda (statement current-type this environment class-list return throw next)
+    (cond
+      ((super-call? statement)
+       ; Call the super method, keep this the same but update current-type
+       (call-function (lookup-in-closure-list
+                       (operand2 (get-function-call-name statement))
+                       (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
+                      (get-function-actual-params statement)
+                      (f-closure-class (lookup-in-closure-list
+                                        (operand2 (get-function-call-name statement))
+                                        (closure-methods (lookup-in-class-list (lookup 'super environment) class-list))))
+                      this
+                      environment
+                      class-list
+                      return
+                      throw
+                      next))
+      ; Call a method in another class, update this and current-type
+      ((list? (get-function-call-name statement))
+       (get-call-instance-and-name (get-function-call-name statement) current-type this environment class-list throw
+                                   (lambda (instance name)
+                                     (call-function (lookup-in-closure-list
+                                                     name
+                                                     (closure-methods (lookup-in-class-list (instance-type instance) class-list)))
+                                                    (get-function-actual-params statement)
+                                                    (f-closure-class (lookup-in-closure-list
+                                                                      name
+                                                                      (closure-methods (lookup-in-class-list (instance-type instance) class-list))))
+                                                    instance
+                                                    environment
+                                                    class-list
+                                                    return
+                                                    throw
+                                                    next))))
+      ; Call a nested function definition from the environment
+      ((exists? (get-function-call-name statement) environment)
+       (call-function (lookup (get-function-call-name statement) environment)
+                      (get-function-actual-params statement)
+                      current-type
+                      this
+                      environment
+                      class-list
+                      return
+                      throw
+                      next))
+      ; Call a method from this instance
+      (else
+       (call-function (lookup-in-closure-list
+                       (get-function-call-name statement)
+                       (closure-methods (lookup-in-class-list (instance-type (lookup 'this environment)) class-list)))
+                      (get-function-actual-params statement)
+                      current-type
+                      this
+                      environment
+                      class-list
+                      return
+                      throw
+                      next)))))
 
 ; Evaluate the actual parameters to a function call and add them to the environment
 (define add-parameters
@@ -413,7 +468,7 @@
 (define interpret-statement
   (lambda (statement current-type this environment class-list return break continue throw next)
     (cond
-      ((eq? 'function (statement-type statement)) (next environment)) ; Function definitions are already handled in global compile
+      ((eq? 'function (statement-type statement)) (next (insert (function-name statement) (create-function-closure statement environment (instance-type this)) environment))) ; Function definitions are already handled in global compile
       ((eq? 'funcall (statement-type statement))  (interpret-function statement current-type this environment class-list next throw))
       ((eq? 'return (statement-type statement))   (interpret-return statement current-type this environment class-list return throw))
       ((eq? 'var (statement-type statement))      (interpret-declare statement current-type this environment class-list next throw))
@@ -430,49 +485,14 @@
 ; Calls a function and ignores the return value (since this function is being called outside of an assignment)
 (define interpret-function
   (lambda (statement current-type this environment class-list next throw)
-    (cond
-      ((super-call? statement)
-       (call-function (lookup-in-closure-list
-                       (operand2 (get-function-call-name statement))
-                       (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
-                      (get-function-actual-params statement)
-                      (f-closure-class (lookup-in-closure-list
-                                        (operand2 (get-function-call-name statement))
-                                        (closure-methods (lookup-in-class-list (lookup 'super environment) class-list))))
-                      this
-                      environment
-                      class-list
-                      (lambda (return-val) (next environment))
-                      throw
-                      (lambda (env) (next environment))))
-      ((list? (get-function-call-name statement))
-       (get-call-instance-and-name (get-function-call-name statement) current-type this environment class-list throw
-                                   (lambda (instance name)
-                                     (call-function (lookup-in-closure-list
-                                                     name
-                                                     (closure-methods (lookup-in-class-list (instance-type instance) class-list)))
-                                                    (get-function-actual-params statement)
-                                                    (f-closure-class (lookup-in-closure-list
-                                                                      name
-                                                                      (closure-methods (lookup-in-class-list (instance-type instance) class-list))))
-                                                    instance
-                                                    environment
-                                                    class-list
-                                                    (lambda (return-val) (next environment))
-                                                    throw
-                                                    (lambda (env) (next environment))))))
-      (else
-       (call-function (lookup-in-closure-list
-                       (get-function-call-name statement)
-                       (closure-methods (lookup-in-class-list (instance-type (lookup 'this environment)) class-list)))
-                      (get-function-actual-params statement)
-                      current-type
-                      this
-                      environment
-                      class-list
-                      (lambda (return-val) (next environment))
-                      throw
-                      (lambda (env) (next environment)))))))
+    (bind-continuations-and-call-function statement
+                                          current-type
+                                          this
+                                          environment
+                                          class-list
+                                          (lambda (return-val) (next environment))
+                                          throw
+                                          (lambda (env) (next environment)))))
 
 ; Calls the return continuation with the given expression value
 (define interpret-return
@@ -484,7 +504,7 @@
   (lambda (statement current-type this environment class-list next throw)
     (if (exists-declare-value? statement)
         (eval-expression (get-declare-value statement) current-type this environment class-list (lambda (v) (next (insert (get-declare-var statement) v environment))) throw)
-        (next (insert (get-declare-var statement) 'novalue environment)))))
+        (next (insert (get-declare-var statement) 0 environment)))))
 
 ; Updates the environment to add a new binding for a variable
 (define interpret-assign
@@ -600,7 +620,7 @@
                (lambda (env2) (break (pop-frame env2))) 
                (lambda (env2) (continue (pop-frame env2))) 
                (lambda (v) (throw v)) 
-               (lambda (env2) (interpret-block finally-block (pop-frame env2) return break continue throw next))))))))
+               (lambda (env2) (interpret-block finally-block current-type this (pop-frame env2) class-list return break continue throw next))))))))
 
 ; To interpret a try block, we must adjust the return, break, continue continuations to interpret the finally block if any of them are used.
 ;  We must create a new throw continuation and then interpret the try block with the new continuations followed by the finally block with the old continuations
@@ -635,7 +655,7 @@
       ((eq? expr 'true) (value-cont #t))
       ((eq? expr 'false) (value-cont #f))
       ((not (list? expr)) (value-cont (lookup-ref expr current-type this environment class-list)))
-      ((eq? (operator expr) 'new) (value-cont (eval-constructor (operand1 expr) environment class-list))) 
+      ((eq? (operator expr) 'new) (value-cont (eval-constructor (operand1 expr) environment class-list throw))) 
       ((eq? (operator expr) 'dot) (eval-dot (operand1 expr) (operand2 expr) current-type this environment class-list value-cont throw))
       ((function-call? expr) (eval-function expr current-type this environment class-list value-cont throw))
       (else (eval-operator expr current-type this environment class-list value-cont throw)))))
@@ -648,15 +668,6 @@
                        (value-cont (get-instance-value dot-rhs current-type instance class-list)))
                      throw)))
 
-; Returns the instance. Checks if the instance is new or not
-(define get-instance
-  (lambda (expr this environment class-list)
-    (if (is-new? (operand1 expr))
-        ; If it's a new object
-        (eval-constructor (type-of-new (operand1 expr)) environment class-list)
-        ; else look it up
-        (lookup-ref (operand1 expr) (instance-type this) this environment class-list))))
-
 ; Search for a variable in the environment before the instance vars
 (define lookup-ref
   (lambda (var current-type this environment class-list)
@@ -668,8 +679,8 @@
     
 ; Create and return new instance of a class
 (define eval-constructor
-  (lambda (class environment class-list)
-    ((closure-constructor (lookup-in-class-list class class-list)) environment class-list)))
+  (lambda (class environment class-list throw)
+    ((closure-constructor (lookup-in-class-list class class-list)) environment class-list throw)))
 
 ; TODO is probably not the car
 (define get-runtime-type
@@ -702,54 +713,17 @@
       (else (lookup var environment)))))
 
 ; Get the value returned by a function call
-; TODO search in class methods before environment by handling dot
-;      the environment only holds nested functions
 (define eval-function
   (lambda (statement current-type this environment class-list value-cont throw)
-    (cond
-      ((super-call? statement)
-       (call-function (lookup-in-closure-list
-                       (operand2 (get-function-call-name statement))
-                       (closure-methods (lookup-in-class-list (lookup 'super environment) class-list)))
-                      (get-function-actual-params statement)
-                      (f-closure-class (lookup-in-closure-list
-                                        (operand2 (get-function-call-name statement))
-                                        (closure-methods (lookup-in-class-list (lookup 'super environment) class-list))))
-                      this
-                      environment
-                      class-list
-                      (lambda (return-val) (value-cont return-val))
-                      throw
-                      (lambda (env) (value-cont 'novalue))))
-      ((list? (get-function-call-name statement))
-       (get-call-instance-and-name (get-function-call-name statement) current-type this environment class-list throw
-                                   (lambda (instance name)
-                                     (call-function (lookup-in-closure-list
-                                                     name
-                                                     (closure-methods (lookup-in-class-list (instance-type instance) class-list)))
-                                                    (get-function-actual-params statement)
-                                                    (f-closure-class (lookup-in-closure-list
-                                                                      name
-                                                                      (closure-methods (lookup-in-class-list (instance-type instance) class-list))))
-                                                    instance
-                                                    environment
-                                                    class-list
-                                                    (lambda (return-val) (value-cont return-val))
-                                                    throw
-                                                    (lambda (env) (value-cont 'novalue))))))
-      (else
-       (call-function (lookup-in-closure-list
-                       (get-function-call-name statement)
-                       (closure-methods (lookup-in-class-list (instance-type (lookup 'this environment)) class-list)))
-                      (get-function-actual-params statement)
-                      current-type
-                      this
-                      environment
-                      class-list
-                      (lambda (return-val) (value-cont return-val))
-                      throw
-                      (lambda (env) (value-cont 'novalue)))))))
-
+    (bind-continuations-and-call-function statement
+                                          current-type
+                                          this
+                                          environment
+                                          class-list
+                                          (lambda (return-val) (value-cont return-val))
+                                          throw
+                                          (lambda (env) (value-cont 'novalue)))))
+      
 ; TODO this: adapt above to correctly use this
 ; it returns the instance from the lhs of the dot and the function name from the rhs
 ;
@@ -928,7 +902,7 @@
 (define lookup-in-closure-list
   (lambda (name list)
     (cond
-      ((null? list) (error "Method not in closure list"))
+      ((null? list) (error "Method not in closure list:" name))
       ((eq? name (caar list)) (car list))
       (else (lookup-in-closure-list name (cdr list))))))
   
