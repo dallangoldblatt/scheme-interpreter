@@ -191,7 +191,7 @@
                                     environment
                                     class-list
                                     (lambda (v) v)
-                                    throw)) ; TODO I guess a try could be passed to the instance creator
+                                    throw))
               (eval-class-instance-vars type (remaining-defs field-defs) class-list environment throw)))))
 
 ; Returns the current value of an instance variable given the class list
@@ -286,7 +286,7 @@
     (lambda (environment)
       (add-functions-to-environment ; Adds the closures of any nested functions to the built environment
        (find-nested-function-definitions (function-body function) (push-frame environment) '() function-class)
-       (push-frame (pop-n-frames (- (length environment) (length function-def-environment)) environment)))))) 
+       (push-frame (pop-n-frames (+ (- (length environment) (length function-def-environment)) 1) environment)))))) 
 
 ; Add a list of function closures to the top frame of the state
 (define add-functions-to-environment
@@ -306,7 +306,8 @@
       ((eq? 'function (statement-type (first-statement body))) (find-nested-function-definitions
                                                                 (remaining-statements body)
                                                                 local-environment
-                                                                (cons (create-function-closure (first-statement body) local-environment function-class) function-list)))
+                                                                (cons (create-function-closure (first-statement body) local-environment function-class) function-list)
+                                                                function-class))
       (else                                                    (find-nested-function-definitions (remaining-statements body) local-environment function-list function-class)))))
 
 ; Helper function for popping n frames off of the given environment
@@ -318,7 +319,7 @@
 
 ; Create the correct environment from the closure, bind the parameters, call the body
 (define call-function
-  (lambda (closure actual-params type this environment class-list return throw next)
+  (lambda (closure actual-params type calling-instance this environment class-list return throw next)
     (interpret-statement-list (f-closure-body closure)
                               type
                               this
@@ -328,7 +329,7 @@
                                (cons 'super (cons 'this (f-closure-formal-params closure)))
                                environment
                                ((f-closure-environment-builder closure) environment)
-                               this
+                               calling-instance
                                class-list
                                throw)
                               class-list
@@ -352,6 +353,7 @@
                                         (operand2 (get-function-call-name statement))
                                         (closure-methods (lookup-in-class-list (lookup 'super environment) class-list))))
                       this
+                      this
                       environment
                       class-list
                       return
@@ -368,6 +370,7 @@
                                                     (f-closure-class (lookup-in-closure-list
                                                                       name
                                                                       (closure-methods (lookup-in-class-list (instance-type instance) class-list))))
+                                                    this
                                                     instance
                                                     environment
                                                     class-list
@@ -378,7 +381,8 @@
       ((exists? (get-function-call-name statement) environment)
        (call-function (lookup (get-function-call-name statement) environment)
                       (get-function-actual-params statement)
-                      current-type
+                      (instance-type this)
+                      this
                       this
                       environment
                       class-list
@@ -393,11 +397,20 @@
                       (get-function-actual-params statement)
                       current-type
                       this
+                      this
                       environment
                       class-list
                       return
                       throw
                       next)))))
+
+; Returns the instance from the lhs of the dot and the function name from the rhs
+(define get-call-instance-and-name
+  (lambda (call current-type this environment class-list throw return)
+    (eval-expression (operand1 call) current-type this environment class-list
+                     (lambda (instance)
+                       (return instance (operand2 call)))
+                     throw)))
 
 ; Evaluate the actual parameters to a function call and add them to the environment
 (define add-parameters
@@ -468,7 +481,7 @@
 (define interpret-statement
   (lambda (statement current-type this environment class-list return break continue throw next)
     (cond
-      ((eq? 'function (statement-type statement)) (next (insert (function-name statement) (create-function-closure statement environment (instance-type this)) environment))) ; Function definitions are already handled in global compile
+      ((eq? 'function (statement-type statement)) (interpret-function-declaration statement this environment next))
       ((eq? 'funcall (statement-type statement))  (interpret-function statement current-type this environment class-list next throw))
       ((eq? 'return (statement-type statement))   (interpret-return statement current-type this environment class-list return throw))
       ((eq? 'var (statement-type statement))      (interpret-declare statement current-type this environment class-list next throw))
@@ -481,6 +494,14 @@
       ((eq? 'throw (statement-type statement))    (interpret-throw statement current-type this environment class-list throw))
       ((eq? 'try (statement-type statement))      (interpret-try statement current-type this environment class-list return break continue throw next))
       (else                                       (error "Unknown statement:" (statement-type statement))))))
+
+; Inserts a nested function declaration into the environment
+(define interpret-function-declaration
+  (lambda (statement this environment next)
+    (if (exists? (function-name statement) environment)
+        (next environment)
+        (next (insert (function-name statement) (create-function-closure statement environment (instance-type this)) environment)))))
+    
 
 ; Calls a function and ignores the return value (since this function is being called outside of an assignment)
 (define interpret-function
@@ -516,7 +537,6 @@
                      class-list
                      (lambda (v)
                        ; Check to see if the assignment is to an instance var
-                       ; TODO check for 'this in and then these two
                        (cond
                          ((list? (get-assign-lhs statement))
                           ; Update the instance box in the environment
@@ -665,7 +685,7 @@
   (lambda (dot-lhs dot-rhs current-type this environment class-list value-cont throw)
     (eval-expression dot-lhs current-type this environment class-list
                      (lambda (instance)
-                       (value-cont (get-instance-value dot-rhs current-type instance class-list)))
+                       (value-cont (get-instance-value dot-rhs (instance-type instance) instance class-list)))
                      throw)))
 
 ; Search for a variable in the environment before the instance vars
@@ -682,7 +702,7 @@
   (lambda (class environment class-list throw)
     ((closure-constructor (lookup-in-class-list class class-list)) environment class-list throw)))
 
-; TODO is probably not the car
+; Get the runtime type of an instance by name
 (define get-runtime-type
   (lambda (variable this environment class-list)
     (cond
@@ -724,15 +744,6 @@
                                           throw
                                           (lambda (env) (value-cont 'novalue)))))
       
-; TODO this: adapt above to correctly use this
-; it returns the instance from the lhs of the dot and the function name from the rhs
-;
-(define get-call-instance-and-name
-  (lambda (call current-type this environment class-list throw return)
-    (eval-expression (operand1 call) current-type this environment class-list
-                     (lambda (instance)
-                       (return instance (operand2 call)))
-                     throw)))
 
 ; Evaluate a binary (or unary) operator.  Although this is not dealing with side effects, I have the routine evaluate the left operand first and then
 ; pass the result to eval-binary-op2 to evaluate the right operand.  This forces the operands to be evaluated in the proper order.
