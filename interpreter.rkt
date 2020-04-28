@@ -600,7 +600,7 @@
                (lambda (env2) (break (pop-frame env2))) 
                (lambda (env2) (continue (pop-frame env2))) 
                (lambda (v) (throw v)) 
-               (lambda (env2) (interpret-block finally-block (pop-frame env2) return break continue throw next))))))))
+               (lambda (env2) (interpret-block finally-block current-type this (pop-frame env2) class-list return break continue throw next))))))))
 
 ; To interpret a try block, we must adjust the return, break, continue continuations to interpret the finally block if any of them are used.
 ;  We must create a new throw continuation and then interpret the try block with the new continuations followed by the finally block with the old continuations
