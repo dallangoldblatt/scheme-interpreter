@@ -665,7 +665,7 @@
   (lambda (dot-lhs dot-rhs current-type this environment class-list value-cont throw)
     (eval-expression dot-lhs current-type this environment class-list
                      (lambda (instance)
-                       (value-cont (get-instance-value dot-rhs current-type instance class-list)))
+                       (value-cont (get-instance-value dot-rhs (instance-type instance) instance class-list)))
                      throw)))
 
 ; Search for a variable in the environment before the instance vars
@@ -703,14 +703,6 @@
     (if (not (eq? (supertype-in-closure closure) 'nosuper))
         (supertype-in-closure closure)
         (error "Class has no super type:" (type-of this)))))
- 
-; Looks up the value of a variable if it's not a new instance
-(define lookup-if-not-new
-  (lambda (var environment class-list)
-    (cond
-      ((var-is-new? var) (eval-constructor (operand1 var) environment class-list))
-      ((eq? var 'super) (lookup 'this environment))
-      (else (lookup var environment)))))
 
 ; Get the value returned by a function call
 (define eval-function
