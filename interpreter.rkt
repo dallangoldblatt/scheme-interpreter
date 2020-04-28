@@ -3,6 +3,14 @@
 (require "classParser.rkt")
 (provide (all-defined-out))
 
+; ------------------------------------------
+; Interpreter Part 4
+
+; Robbie Dozier
+; Dallan Goldblatt
+; Ethan Voss
+; ------------------------------------------
+
 ; An interpreter for the simple language using tail recursion for the M_state functions
 
 ; Functions that start compile-...  all set up class/function closuere prior to program executuon.
@@ -430,7 +438,15 @@
                             (remaining-params actual-params)
                             (remaining-params formal-params)
                             call-environment
-                            (insert (first-param formal-params) (eval-expression (first-param actual-params) (instance-type this) this call-environment class-list (lambda (v) v) throw) function-environment)
+                            (insert (first-param formal-params)
+                                    (eval-expression (first-param actual-params)
+                                                     (instance-type this)
+                                                     this
+                                                     call-environment
+                                                     class-list
+                                                     (lambda (v) v)
+                                                     throw)
+                                    function-environment)
                             this
                             class-list
                             throw)))))
@@ -636,7 +652,7 @@
                this
                (insert (catch-var catch-statement) ex (push-frame environment))
                class-list
-               return 
+               (lambda (v) (interpret-block finally-block current-type this environment class-list return break continue throw (lambda (env2) (return v)))) 
                (lambda (env2) (break (pop-frame env2))) 
                (lambda (env2) (continue (pop-frame env2))) 
                (lambda (v) (throw v)) 
@@ -651,8 +667,9 @@
            (new-return (lambda (v) (interpret-block finally-block current-type this environment class-list return break continue throw (lambda (env2) (return v)))))
            (new-break (lambda (env) (interpret-block finally-block current-type this env class-list return break continue throw (lambda (env2) (break env2)))))
            (new-continue (lambda (env) (interpret-block finally-block current-type this env class-list return break continue throw (lambda (env2) (continue env2)))))
-           (new-throw (create-throw-catch-continuation (get-catch statement) current-type this environment class-list return break continue throw next finally-block)))
-      (interpret-block try-block current-type this environment class-list new-return new-break new-continue new-throw (lambda (env) (interpret-block finally-block current-type this env class-list return break continue throw next))))))
+           (new-throw (create-throw-catch-continuation (get-catch statement) current-type this environment class-list return break continue throw next finally-block))
+           (new-next (lambda (env) (interpret-block finally-block current-type this env class-list return break continue throw next))))
+      (interpret-block try-block current-type this environment class-list new-return new-break new-continue new-throw new-next))))
 
 ; helper methods so that I can reuse the interpret-block method on the try and finally blocks
 (define make-try-block
@@ -702,14 +719,6 @@
   (lambda (class environment class-list throw)
     ((closure-constructor (lookup-in-class-list class class-list)) environment class-list throw)))
 
-; Get the runtime type of an instance by name
-(define get-runtime-type
-  (lambda (variable this environment class-list)
-    (cond
-      ((var-is-new? variable) (operand1 variable))
-      ((eq? variable 'super) (lookup-super this class-list))
-      (else (car (lookup-ref variable (instance-type this) this environment class-list))))))
-
 ; Looks up the super type of the current type
 (define lookup-super
   (lambda (this class-list)
@@ -723,14 +732,6 @@
     (if (not (eq? (supertype-in-closure closure) 'nosuper))
         (supertype-in-closure closure)
         (error "Class has no super type:" (type-of this)))))
- 
-; Looks up the value of a variable if it's not a new instance
-(define lookup-if-not-new
-  (lambda (var environment class-list)
-    (cond
-      ((var-is-new? var) (eval-constructor (operand1 var) environment class-list))
-      ((eq? var 'super) (lookup 'this environment))
-      (else (lookup var environment)))))
 
 ; Get the value returned by a function call
 (define eval-function
